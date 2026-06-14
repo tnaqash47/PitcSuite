@@ -30,8 +30,6 @@ QMainWindow, QWidget {
     color: #e0e6f0;
     font-family: 'Consolas', 'Courier New', monospace;
     font-size: 12px;
-    fgadfasdf
-    adfasf
 }
 QGroupBox {
     border: 1px solid #2e3340;
