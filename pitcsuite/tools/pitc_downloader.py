@@ -435,11 +435,7 @@ class PITCPanel(QWidget):
         download_template(
             self,
             headers      = ["AC No", "Sr No", "Month", "Amount", "Status"],
-            default_name = "PITC_Downloader_Template.xlsx",
-            sample_rows  = [
-                ["07269330425000", 1, "Jan-26", 1500, ""],
-                ["07269330426000", 2, "Feb-26", 2300, ""],
-            ]
+            default_name = "PITC_Downloader_Template.xlsx"
         )
 
     def run(self):

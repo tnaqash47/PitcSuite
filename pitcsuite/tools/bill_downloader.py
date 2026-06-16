@@ -218,7 +218,7 @@ class BillSoftPanel(QWidget):
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
 
         total = sh.max_row - 1; done = 0; collected = []
-        WAIT = 8; MAX_ATTEMPTS = 3
+        WAIT = 12; MAX_ATTEMPTS = 3; MIN_RENDER_WAIT = 5
 
         def visible_search_boxes():
             return [el for el in driver.find_elements(By.ID, "searchTextBox") if el.is_displayed()]
@@ -261,6 +261,20 @@ class BillSoftPanel(QWidget):
                 return "loaded"
             return "loading"
 
+        def wait_until_render_ready(clicked_at):
+            remaining = MIN_RENDER_WAIT - (time.time() - clicked_at)
+            if remaining > 0:
+                time.sleep(remaining)
+
+            try:
+                WebDriverWait(driver, 5).until(lambda d: d.execute_script("""
+                    const ready = document.readyState === 'complete';
+                    const imagesReady = Array.from(document.images || []).every(img => img.complete);
+                    return ready && imagesReady;
+                """))
+            except Exception:
+                pass
+
         for r in range(2, sh.max_row + 1):
             if self.stop_flag:
                 sh.cell(r, 3).value = "Stopped"; wb.save(excel); break
@@ -276,12 +290,15 @@ class BillSoftPanel(QWidget):
                     wait = WebDriverWait(driver, 20)
                     box = wait.until(EC.element_to_be_clickable((By.ID, "searchTextBox")))
                     box.clear(); box.send_keys(ac)
+                    clicked_at = time.time()
                     driver.find_element(By.ID, "btnSearch").click()
 
-                    end = time.time() + WAIT
+                    end = clicked_at + WAIT
                     state = "loading"
                     while time.time() < end:
                         state = bill_state(ac)
+                        if state == "loaded" and time.time() - clicked_at < MIN_RENDER_WAIT:
+                            state = "loading"
                         if state != "loading":
                             break
                         time.sleep(0.5)
@@ -293,6 +310,7 @@ class BillSoftPanel(QWidget):
                 if state == "wrong_ac":
                     status = "Wrong AC No."; break
                 if state == "loaded":
+                    wait_until_render_ready(clicked_at)
                     bill_loaded = True; status = "Saved"; break
                 self.signals.log.emit(f"Attempt {attempt}/{MAX_ATTEMPTS}: bill page still loading")
 

@@ -188,11 +188,7 @@ class PaymentExtractPanel(QWidget):
         download_template(
             self,
             headers      = ["BN", "Sdiv", "AC No.", "Para Sr. No."],
-            default_name = "PaymentExtract_Template.xlsx",
-            sample_rows  = [
-                ["01", "101", "07269330425000", "1"],
-                ["02", "102", "07269330426000", "2"],
-            ]
+            default_name = "PaymentExtract_Template.xlsx"
         )
 
     def start(self):

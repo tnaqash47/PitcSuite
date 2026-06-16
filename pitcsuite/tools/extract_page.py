@@ -78,11 +78,7 @@ class ExtractPagePanel(QWidget):
         download_template(
             self,
             headers      = ["AC No", "Search Criteria", "Para Sr. No."],
-            default_name = "ExtractPage_Template.xlsx",
-            sample_rows  = [
-                ["07269330425000", "Jan-26", "101"],
-                ["07269330426000", 5250,     "102"],
-            ]
+            default_name = "ExtractPage_Template.xlsx"
         )
 
     def update_progress(self, cur, total):

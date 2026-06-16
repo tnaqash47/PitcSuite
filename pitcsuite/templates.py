@@ -16,10 +16,6 @@ def download_template(parent, headers, default_name, sample_rows=None):
         cell = ws.cell(row=1, column=col, value=h)
         cell.font = hdr_font; cell.fill = hdr_fill; cell.alignment = hdr_align
         ws.column_dimensions[cell.column_letter].width = max(len(h) + 6, 16)
-    if sample_rows:
-        for r, row_data in enumerate(sample_rows, 2):
-            for c, val in enumerate(row_data, 1):
-                ws.cell(row=r, column=c, value=val)
     wb.save(path)
     QMessageBox.information(parent, "Template Saved", f"Template saved to:\n{path}")
 
