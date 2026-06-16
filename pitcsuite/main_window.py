@@ -34,7 +34,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("PITC Suite  ·  Developed by Tahir Naqash")
         self.setWindowIcon(app_icon())
-        self.resize(720, 680)
+        self.resize(780, 580)
         self.nav_collapsed = False
 
         root = QWidget()
