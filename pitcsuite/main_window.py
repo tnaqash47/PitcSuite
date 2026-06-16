@@ -90,7 +90,7 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(panel)
 
         nav_layout.addStretch()
-        self.ver_lbl = QLabel("v1.5")
+        self.ver_lbl = QLabel("v1.8")
         self.ver_lbl.setAlignment(Qt.AlignCenter)
         self.ver_lbl.setStyleSheet("color:#3a4a6a; font-size:10px; padding:8px;")
         nav_layout.addWidget(self.ver_lbl)
