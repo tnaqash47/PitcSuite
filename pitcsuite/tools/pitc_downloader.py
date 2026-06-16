@@ -29,7 +29,6 @@ REPORT_HREF = {
 class PITCWorker(QThread):
     progress = Signal(int)
     log      = Signal(str)
-    finished = Signal()
 
     def __init__(self, excel, report_key, download_dir, profile_dir,
                  restart_after, warmup, print_wait, print_x, print_y):
@@ -56,7 +55,7 @@ class PITCWorker(QThread):
             from selenium.webdriver.common.keys import Keys
             from selenium.webdriver.support.ui import WebDriverWait
             from selenium.webdriver.support import expected_conditions as EC
-            from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
+            from selenium.common.exceptions import InvalidSessionIdException, StaleElementReferenceException, TimeoutException
             from webdriver_manager.chrome import ChromeDriverManager
             from openpyxl import load_workbook
             from reportlab.pdfgen import canvas
@@ -66,7 +65,6 @@ class PITCWorker(QThread):
             import pyotp
         except ImportError as e:
             self.log.emit(f"ERROR: Missing library — {e}")
-            self.finished.emit()
             return
 
         cfg = configparser.ConfigParser()
@@ -77,7 +75,6 @@ class PITCWorker(QThread):
             OTP_SECRET = cfg["credentials"].get("otp_secret", "")
         except Exception:
             self.log.emit("ERROR: config.ini missing or invalid. Set credentials in ⚙️ Settings first.")
-            self.finished.emit()
             return
 
         dl = self.download_dir
@@ -221,26 +218,43 @@ class PITCWorker(QThread):
                 for attempt in range(5):
                     try:
                         otp_box = wt.until(EC.element_to_be_clickable((By.ID, "ctl00_ContentPlaceHolder1_txtOtp")))
-                        time.sleep(0.5)
                         otp_code = generate_otp()
                         self.log.emit(f"OTP attempt {attempt+1}: {otp_code}")
                         otp_box.send_keys(Keys.CONTROL, "a", Keys.BACKSPACE)
                         otp_box.send_keys(otp_code)
                         wt.until(EC.element_to_be_clickable((By.ID, "ctl00_ContentPlaceHolder1_btnVerify"))).click()
-                        time.sleep(2)
+                        WebDriverWait(drv, 10).until(EC.element_to_be_clickable((By.NAME, "ctl00$ContentPlaceHolder1$txtReferenceNumber")))
                         if drv.find_elements(By.NAME, "ctl00$ContentPlaceHolder1$txtReferenceNumber"):
                             self.log.emit("OTP verified ✔")
                             return
-                        time.sleep(3)
+                        time.sleep(0.5)
+                    except TimeoutException:
+                        self.log.emit("OTP not accepted; retrying")
+                    except InvalidSessionIdException:
+                        raise
                     except Exception as e:
                         self.log.emit(f"OTP retry: {e}")
-                        time.sleep(3)
+                    time.sleep(1)
                 raise Exception("OTP verification failed")
 
         def ensure_logged_in(drv, wt):
             if not drv.find_elements(By.NAME, "ctl00$ContentPlaceHolder1$txtReferenceNumber"):
                 self.log.emit("Session expired → re-login")
                 do_login(drv, wt)
+
+        def login_with_session_recovery(drv, wt):
+            try:
+                do_login(drv, wt)
+                return drv, wt
+            except InvalidSessionIdException:
+                self.log.emit("Browser session lost during OTP; restarting Chrome")
+                try:
+                    drv.quit()
+                except Exception:
+                    pass
+                drv, wt = start_driver()
+                do_login(drv, wt)
+                return drv, wt
 
         def open_report_link(drv, wt, href_kw):
             """Click the report link with stale-element retry."""
@@ -262,7 +276,7 @@ class PITCWorker(QThread):
             raise Exception(f"Could not open report link: {href_kw}")
 
         driver, wait = start_driver()
-        do_login(driver, wait)
+        driver, wait = login_with_session_recovery(driver, wait)
 
         wb         = load_workbook(self.excel)
         sheet      = wb.active
@@ -271,7 +285,9 @@ class PITCWorker(QThread):
         row        = 2
         href_kw    = REPORT_HREF[self.report_key]
 
-        time.sleep(self.warmup)
+        wait.until(EC.element_to_be_clickable((By.NAME, "ctl00$ContentPlaceHolder1$txtReferenceNumber")))
+        if self.warmup > 0:
+            time.sleep(self.warmup)
 
         while True:
             if not self.running: break
@@ -289,7 +305,6 @@ class PITCWorker(QThread):
 
                 box = wait.until(EC.element_to_be_clickable((By.NAME, "ctl00$ContentPlaceHolder1$txtReferenceNumber")))
                 box.send_keys(Keys.CONTROL, "a", Keys.BACKSPACE)
-                time.sleep(0.5)
                 box.send_keys(str(ac))
 
                 wait.until(EC.element_to_be_clickable((By.NAME, "ctl00$ContentPlaceHolder1$btnGo"))).click()
@@ -340,12 +355,13 @@ class PITCWorker(QThread):
                 self.log.emit("Restarting browser session…")
                 driver.quit(); time.sleep(6)
                 driver, wait = start_driver()
-                do_login(driver, wait)
-                time.sleep(self.warmup)
+                driver, wait = login_with_session_recovery(driver, wait)
+                wait.until(EC.element_to_be_clickable((By.NAME, "ctl00$ContentPlaceHolder1$txtReferenceNumber")))
+                if self.warmup > 0:
+                    time.sleep(self.warmup)
 
         wb.save(self.excel)
         driver.quit()
-        self.finished.emit()
 
 
 class PITCPanel(QWidget):
@@ -409,7 +425,7 @@ class PITCPanel(QWidget):
             s = QSpinBox(); s.setRange(mn, mx); s.setValue(val); return s
 
         g3h.addWidget(QLabel("Restart After"));  self.sp_restart = spin(35, 1, 200); g3h.addWidget(self.sp_restart)
-        g3h.addWidget(QLabel("Warmup (s)"));     self.sp_warmup  = spin(10, 1, 200); g3h.addWidget(self.sp_warmup)
+        g3h.addWidget(QLabel("Warmup (s)"));     self.sp_warmup  = spin(0, 0, 200); g3h.addWidget(self.sp_warmup)
         g3h.addWidget(QLabel("Print Wait (s)")); self.sp_pwait   = spin(6,  1, 200); g3h.addWidget(self.sp_pwait)
         g3h.addWidget(QLabel("Print X"));        self.sp_px      = spin(30);         g3h.addWidget(self.sp_px)
         g3h.addWidget(QLabel("Print Y"));        self.sp_py      = spin(165);        g3h.addWidget(self.sp_py)
