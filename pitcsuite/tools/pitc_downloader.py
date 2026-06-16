@@ -8,7 +8,7 @@ import configparser
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton,
     QLineEdit, QFileDialog, QCheckBox, QTextEdit, QProgressBar,
-    QVBoxLayout, QHBoxLayout, QGroupBox, QMessageBox, QComboBox,
+    QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QMessageBox, QComboBox,
     QSpinBox
 )
 from PySide6.QtCore import Signal, QObject, QThread
@@ -387,8 +387,10 @@ class PITCPanel(QWidget):
         # ── Excel + Template ──
         g1 = QGroupBox("Excel File  (Columns: A = AC No  ·  B = Sr No  ·  C = Month  ·  D = Amount  ·  E = Status)")
         g1v = QVBoxLayout(g1)
+        g1.setTitle("Excel File")
+        g1v.addWidget(QLabel("Columns: A = AC No  -  B = Sr No\nC = Month  -  D = Amount  -  E = Status"))
         r_ex = QHBoxLayout()
-        self.excel_ed = QLineEdit("D:\\PITC.xlsx"); self.excel_ed.setReadOnly(True)
+        self.excel_ed = QLineEdit("D:\\PITC.xlsx"); self.excel_ed.setReadOnly(True); self.excel_ed.setProperty("preferred_width", 245)
         b1 = QPushButton("Browse"); b1.clicked.connect(self.pick_excel)
         btn_tpl = QPushButton("⬇  Download Template")
         btn_tpl.setStyleSheet("background:#194; border:none; border-radius:4px; padding:5px 10px; color:#fff;")
@@ -409,26 +411,29 @@ class PITCPanel(QWidget):
         # ── Paths ──
         g2 = QGroupBox("Paths")
         g2v = QVBoxLayout(g2)
-        r_dl = QHBoxLayout(); r_dl.addWidget(QLabel("Download Dir:"))
+        r_dl = QHBoxLayout(); lbl_dl = QLabel("Download Dir:"); lbl_dl.setFixedWidth(105); r_dl.addWidget(lbl_dl)
         self.dl_ed = QLineEdit(r"D:\PITC_PDFs"); r_dl.addWidget(self.dl_ed, 1)
         g2v.addLayout(r_dl)
-        r_pr = QHBoxLayout(); r_pr.addWidget(QLabel("Chrome Profile:"))
-        self.pr_ed = QLineEdit(r"C:\ChromeProfiles\PITC"); r_pr.addWidget(self.pr_ed, 1)
+        r_pr = QHBoxLayout(); lbl_pr = QLabel("Chrome Profile:"); lbl_pr.setFixedWidth(105); r_pr.addWidget(lbl_pr)
+        self.pr_ed = QLineEdit(r"C:\ChromeProfiles\PITC"); self.pr_ed.setProperty("preferred_width", 245); r_pr.addWidget(self.pr_ed, 1)
         g2v.addLayout(r_pr)
         layout.addWidget(g2)
 
         # ── Timing & Print ──
         g3 = QGroupBox("Timing & Print Dialog")
-        g3h = QHBoxLayout(g3)
+        g3h = QGridLayout(g3)
+        g3h.setHorizontalSpacing(8)
+        g3h.setVerticalSpacing(6)
 
         def spin(val, mn=1, mx=9999):
             s = QSpinBox(); s.setRange(mn, mx); s.setValue(val); return s
 
-        g3h.addWidget(QLabel("Restart After"));  self.sp_restart = spin(35, 1, 200); g3h.addWidget(self.sp_restart)
-        g3h.addWidget(QLabel("Warmup (s)"));     self.sp_warmup  = spin(0, 0, 200); g3h.addWidget(self.sp_warmup)
-        g3h.addWidget(QLabel("Print Wait (s)")); self.sp_pwait   = spin(6,  1, 200); g3h.addWidget(self.sp_pwait)
-        g3h.addWidget(QLabel("Print X"));        self.sp_px      = spin(30);         g3h.addWidget(self.sp_px)
-        g3h.addWidget(QLabel("Print Y"));        self.sp_py      = spin(165);        g3h.addWidget(self.sp_py)
+        g3h.addWidget(QLabel("Restart"), 0, 0);        self.sp_restart = spin(35, 1, 200); g3h.addWidget(self.sp_restart, 0, 1)
+        g3h.addWidget(QLabel("Warmup"), 0, 2);         self.sp_warmup  = spin(0, 0, 200);  g3h.addWidget(self.sp_warmup, 0, 3)
+        g3h.addWidget(QLabel("Print Wait (s)"), 0, 4); self.sp_pwait   = spin(6,  1, 200); g3h.addWidget(self.sp_pwait, 0, 5)
+        g3h.addWidget(QLabel("Print X"), 1, 0);        self.sp_px      = spin(30);         g3h.addWidget(self.sp_px, 1, 1)
+        g3h.addWidget(QLabel("Print Y"), 1, 2);        self.sp_py      = spin(165);        g3h.addWidget(self.sp_py, 1, 3)
+        g3h.setColumnStretch(6, 1)
         layout.addWidget(g3)
 
         # ── Buttons ──

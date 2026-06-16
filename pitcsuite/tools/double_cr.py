@@ -49,6 +49,8 @@ class DoubleCRPanel(QWidget):
         tpl_h = QHBoxLayout()
         btn_cr_tpl = QPushButton("⬇  CR Template");  btn_cr_tpl.clicked.connect(self._save_cr_template)
         btn_ac_tpl = QPushButton("⬇  AC Template");  btn_ac_tpl.clicked.connect(self._save_ac_template)
+        btn_cr_tpl.setProperty("preferred_width", 128)
+        btn_ac_tpl.setProperty("preferred_width", 128)
         tpl_h.addWidget(btn_cr_tpl); tpl_h.addWidget(btn_ac_tpl); tpl_h.addStretch()
         gv.addLayout(tpl_h)
         layout.addWidget(g)

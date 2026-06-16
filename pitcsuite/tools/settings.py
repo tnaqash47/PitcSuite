@@ -41,7 +41,7 @@ class SettingsPanel(QWidget):
         gv.addLayout(r2)
 
         r3 = QHBoxLayout()
-        r3.addWidget(QLabel("OTP Secret:")); self.otp_ed = QLineEdit()
+        r3.addWidget(QLabel("OTP Secret:")); self.otp_ed = QLineEdit(); self.otp_ed.setProperty("preferred_width", 320)
         self.otp_ed.setEchoMode(QLineEdit.Password)
         self.otp_ed.setPlaceholderText("TOTP base32 secret (leave blank if no OTP required)")
         r3.addWidget(self.otp_ed, 1)
@@ -60,6 +60,7 @@ class SettingsPanel(QWidget):
 
         bh = QHBoxLayout()
         btn_save = QPushButton("💾  Save Credentials")
+        btn_save.setProperty("preferred_width", 170)
         btn_save.setStyleSheet(START_BTN + " padding:8px 24px;")
         btn_save.clicked.connect(self.save)
         bh.addWidget(btn_save); bh.addStretch()

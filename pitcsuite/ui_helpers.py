@@ -5,7 +5,7 @@ QMainWindow, QWidget {
     background-color: #1a1d23;
     color: #e0e6f0;
     font-family: 'Consolas', 'Courier New', monospace;
-    font-size: 12px;
+    font-size: 11px;
 }
 QGroupBox {
     border: 1px solid #2e3340;
@@ -24,15 +24,16 @@ QLineEdit {
     background: #12151c;
     border: 1px solid #2e3340;
     border-radius: 4px;
-    padding: 4px 8px;
+    padding: 3px 7px;
     color: #e0e6f0;
+    font-size: 11px;
 }
 QLineEdit:focus { border-color: #4a90d9; }
 QPushButton {
     background: #252933;
     border: 1px solid #3a3f50;
     border-radius: 4px;
-    padding: 5px 14px;
+    padding: 5px 10px;
     color: #c8d6f0;
 }
 QPushButton:hover { background: #2e3340; border-color: #4a90d9; color: #fff; }
@@ -88,10 +89,10 @@ QPushButton {
     border: none;
     border-left: 3px solid transparent;
     border-radius: 0;
-    padding: 12px 20px;
+    padding: 10px 12px;
     text-align: left;
     color: #8090a8;
-    font-size: 12px;
+    font-size: 11px;
     font-family: 'Consolas', monospace;
 }
 QPushButton:hover { background: #1e2230; color: #c8d6f0; border-left-color: #3a4a6a; }
@@ -109,6 +110,7 @@ STOP_BTN  = "background:#922; border:none; border-radius:4px; padding:6px 18px; 
 
 def lbl(text, bold=False, color=None):
     w = QLabel(text)
+    w.setWordWrap(True)
     if bold:
         f = w.font(); f.setBold(True); w.setFont(f)
     if color:

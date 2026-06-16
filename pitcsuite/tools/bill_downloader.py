@@ -73,13 +73,13 @@ class BillSoftPanel(QWidget):
 
     def _excel_row(self):
         r = QHBoxLayout(); r.addWidget(QLabel("Excel File:"))
-        self.ed_excel = QLineEdit(); self.ed_excel.setReadOnly(True); r.addWidget(self.ed_excel, 1)
+        self.ed_excel = QLineEdit(); self.ed_excel.setReadOnly(True); self.ed_excel.setProperty("preferred_width", 280); r.addWidget(self.ed_excel, 1)
         b = QPushButton("Browse"); b.clicked.connect(lambda: (p := QFileDialog.getOpenFileName(self,"Excel","","Excel (*.xlsx)")[0]) and self.ed_excel.setText(p)); r.addWidget(b)
         return r
 
     def _url_row(self):
         r = QHBoxLayout(); r.addWidget(QLabel("Bills URL:"))
-        self.ed_url = QLineEdit("https://bill.pitc.com.pk/pescobill/"); self.ed_url.setReadOnly(True); r.addWidget(self.ed_url, 1)
+        self.ed_url = QLineEdit("https://bill.pitc.com.pk/pescobill/"); self.ed_url.setReadOnly(True); self.ed_url.setProperty("preferred_width", 310); r.addWidget(self.ed_url, 1)
         self.btn_url = QPushButton("Edit"); self.btn_url.clicked.connect(self.toggle_url); r.addWidget(self.btn_url)
         return r
 

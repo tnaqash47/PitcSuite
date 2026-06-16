@@ -29,13 +29,14 @@ class SrNoCheckerPanel(QWidget):
         g = QGroupBox("Inputs")
         gv = QVBoxLayout(g)
 
-        r1 = QHBoxLayout(); r1.addWidget(QLabel("Excel File:"))
-        self.excel_ed = QLineEdit(); self.excel_ed.setReadOnly(True); r1.addWidget(self.excel_ed, 1)
+        label_w = 70
+        r1 = QHBoxLayout(); lbl_excel = QLabel("Excel File:"); lbl_excel.setFixedWidth(label_w); r1.addWidget(lbl_excel)
+        self.excel_ed = QLineEdit(); self.excel_ed.setReadOnly(True); self.excel_ed.setProperty("preferred_width", 245); r1.addWidget(self.excel_ed, 1)
         b1 = QPushButton("Browse"); b1.clicked.connect(self._browse_excel); r1.addWidget(b1)
         gv.addLayout(r1)
 
-        r2 = QHBoxLayout(); r2.addWidget(QLabel("Folder:"))
-        self.folder_ed = QLineEdit(); self.folder_ed.setReadOnly(True); r2.addWidget(self.folder_ed, 1)
+        r2 = QHBoxLayout(); lbl_folder = QLabel("Folder:"); lbl_folder.setFixedWidth(label_w); r2.addWidget(lbl_folder)
+        self.folder_ed = QLineEdit(); self.folder_ed.setReadOnly(True); self.folder_ed.setProperty("preferred_width", 245); r2.addWidget(self.folder_ed, 1)
         b2 = QPushButton("Browse"); b2.clicked.connect(self._browse_folder); r2.addWidget(b2)
         gv.addLayout(r2)
         layout.addWidget(g)

@@ -28,17 +28,20 @@ class ExtractSdPanel(QWidget):
         g = QGroupBox("Settings")
         gv = QVBoxLayout(g)
 
-        r0 = QHBoxLayout(); r0.addWidget(QLabel("Folder Path:"))
-        self.folder_ed = QLineEdit(); self.folder_ed.setReadOnly(True); r0.addWidget(self.folder_ed, 1)
+        label_w = 118
+        r0 = QHBoxLayout(); lbl_folder = QLabel("Folder Path:"); lbl_folder.setFixedWidth(label_w); r0.addWidget(lbl_folder)
+        self.folder_ed = QLineEdit(); self.folder_ed.setReadOnly(True); self.folder_ed.setProperty("preferred_width", 230); r0.addWidget(self.folder_ed, 1)
         bb = QPushButton("Browse"); bb.clicked.connect(lambda: (p := QFileDialog.getExistingDirectory(self,"Folder")) and self.folder_ed.setText(p)); r0.addWidget(bb)
         gv.addLayout(r0)
 
-        r1 = QHBoxLayout(); r1.addWidget(QLabel("From Sub-Div Code:")); self.from_ed = QLineEdit(); r1.addWidget(self.from_ed)
-        r1.addWidget(QLabel("To Sub-Div Code:")); self.to_ed = QLineEdit(); r1.addWidget(self.to_ed)
+        r1 = QHBoxLayout(); lbl_from = QLabel("From Sub-Div Code:"); lbl_from.setFixedWidth(label_w); r1.addWidget(lbl_from); self.from_ed = QLineEdit(); self.from_ed.setProperty("preferred_width", 110); r1.addWidget(self.from_ed)
         gv.addLayout(r1)
 
-        r2 = QHBoxLayout(); r2.addWidget(QLabel("Output Folder:"))
-        self.out_ed = QLineEdit(r"D:\ExtractedFiles"); self.out_ed.setReadOnly(True); r2.addWidget(self.out_ed, 1)
+        r1b = QHBoxLayout(); lbl_to = QLabel("To Sub-Div Code:"); lbl_to.setFixedWidth(label_w); r1b.addWidget(lbl_to); self.to_ed = QLineEdit(); self.to_ed.setProperty("preferred_width", 110); r1b.addWidget(self.to_ed)
+        gv.addLayout(r1b)
+
+        r2 = QHBoxLayout(); lbl_out = QLabel("Output Folder:"); lbl_out.setFixedWidth(label_w); r2.addWidget(lbl_out)
+        self.out_ed = QLineEdit(r"D:\ExtractedFiles"); self.out_ed.setReadOnly(True); self.out_ed.setProperty("preferred_width", 230); r2.addWidget(self.out_ed, 1)
         ch = QPushButton("Change"); ch.clicked.connect(lambda: (p := QFileDialog.getExistingDirectory(self,"Output")) and self.out_ed.setText(p)); r2.addWidget(ch)
         gv.addLayout(r2)
         layout.addWidget(g)
