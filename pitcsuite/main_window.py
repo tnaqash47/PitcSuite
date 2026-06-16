@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget, QFrame
 from PySide6.QtCore import Qt
 
+from pitcsuite.icons import app_icon
 from pitcsuite.ui_helpers import NAV_STYLE
 from pitcsuite.tools.pitc_downloader import PITCPanel
 from pitcsuite.tools.extract_page import ExtractPagePanel
@@ -32,6 +33,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PITC Suite  ·  Developed by Tahir Naqash")
+        self.setWindowIcon(app_icon())
         self.resize(820, 620)
 
         root = QWidget()
