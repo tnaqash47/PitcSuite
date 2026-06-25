@@ -25,6 +25,13 @@ class BillWorkerSignals(QObject):
 
 
 class BillSoftPanel(QWidget):
+    PDF_SCALE_X = 0.90
+    PDF_SCALE_Y = 0.96
+    PDF_IGNORED_CROP_TEXT = (
+        "snap service temporarily unavailable",
+        "sr. no.",
+    )
+
     def __init__(self):
         super().__init__()
         self.stop_flag = False; self.pause_flag = False
@@ -149,6 +156,9 @@ class BillSoftPanel(QWidget):
 
         for block in src_page.get_text("blocks"):
             if len(block) >= 5 and str(block[4]).strip():
+                text = str(block[4]).strip().lower()
+                if any(ignored in text for ignored in self.PDF_IGNORED_CROP_TEXT):
+                    continue
                 rect = fitz.Rect(block[:4])
                 content_rect = rect if content_rect is None else content_rect | rect
 
@@ -172,9 +182,18 @@ class BillSoftPanel(QWidget):
                 fontname="helv",
                 color=(0, 0, 0),
             )
-            target = fitz.Rect(18, 36, a4.width - 18, a4.height - 18)
+            usable = fitz.Rect(0, 36, a4.width, a4.height)
         else:
-            target = fitz.Rect(18, 18, a4.width - 18, a4.height - 18)
+            usable = a4
+
+        target_width = usable.width * self.PDF_SCALE_X
+        target_height = usable.height * self.PDF_SCALE_Y
+        target = fitz.Rect(
+            usable.x0 + (usable.width - target_width) / 2,
+            usable.y0 + (usable.height - target_height) / 2,
+            usable.x0 + (usable.width + target_width) / 2,
+            usable.y0 + (usable.height + target_height) / 2,
+        )
 
         page.show_pdf_page(target, src, 0, clip=content_rect, keep_proportion=False)
 
@@ -322,7 +341,7 @@ class BillSoftPanel(QWidget):
 
             pdf = driver.execute_cdp_cmd("Page.printToPDF", {
                 "printBackground": True, "paperWidth": 8.27, "paperHeight": 11.69,
-                "marginTop": 0.15, "marginBottom": 0.15, "marginLeft": 0.15, "marginRight": 0.15, "scale": 0.60
+                "marginTop": 0, "marginBottom": 0, "marginLeft": 0, "marginRight": 0, "scale": self.PDF_SCALE_X
             })
             pdf_name = str(sr).strip() if sr else ac
             p = self._unique_pdf(out, pdf_name)
