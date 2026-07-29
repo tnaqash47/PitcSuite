@@ -212,3 +212,65 @@ class FileMoverPanel(QWidget):
         QMessageBox.information(self, "Completed", message)
 
     def _failed(self, message): self.status.setText("Status: Failed"); QMessageBox.critical(self, "Error", message)
+
+
+class CP52Worker(QThread):
+    log = Signal(str)
+    done = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, source_dir, workbook, output_dir):
+        super().__init__(); self.source_dir = Path(source_dir); self.workbook = Path(workbook); self.output_dir = Path(output_dir)
+
+    def run(self):
+        try:
+            from pitcsuite.tools.cp52_posting_checker_logic import process_workbook
+            result = process_workbook(self.source_dir, self.workbook, self.output_dir, self.log.emit)
+            self.done.emit(str(result))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class CP52PostingCheckerPanel(QWidget):
+    def __init__(self):
+        super().__init__(); self.worker = None
+        layout = QVBoxLayout(self); layout.setSpacing(10)
+        layout.addWidget(lbl("CP-52 Posting Checker", bold=True, color="#7eb8f7"))
+        layout.addWidget(lbl("Match CP-52 posting records from TXT/PDF files and create highlighted PDFs.", color="#556")); layout.addWidget(hline())
+        group = QGroupBox("Inputs")
+        form = QVBoxLayout(group)
+        self.source_ed, self.workbook_ed, self.output_ed = QLineEdit(), QLineEdit(), QLineEdit()
+        for label, edit, kind in (("Posting folder:", self.source_ed, "folder"), ("Excel input:", self.workbook_ed, "excel"), ("Output folder:", self.output_ed, "folder")):
+            row = QHBoxLayout(); row.addWidget(QLabel(label)); edit.setProperty("preferred_width", 245); row.addWidget(edit, 1)
+            button = QPushButton("Browse"); button.clicked.connect(lambda _, e=edit, k=kind: self._browse(e, k)); row.addWidget(button); form.addLayout(row)
+        layout.addWidget(group)
+        actions = QHBoxLayout(); self.start_btn = QPushButton("▶  CHECK POSTING"); self.start_btn.setStyleSheet(START_BTN); self.start_btn.clicked.connect(self._start); actions.addWidget(self.start_btn)
+        open_btn = QPushButton("Open Output"); open_btn.clicked.connect(self._open_output); actions.addWidget(open_btn); actions.addStretch(); layout.addLayout(actions)
+        self.status = QLabel("Status: Ready"); self.status.setStyleSheet("color:#4a90d9;"); layout.addWidget(self.status)
+        self.log_box = QTextEdit(); self.log_box.setReadOnly(True); layout.addWidget(self.log_box)
+
+    def _browse(self, edit, kind):
+        if kind == "excel":
+            path = QFileDialog.getOpenFileName(self, "Excel input", "", "Excel files (*.xlsx);;All files (*.*)")[0]
+        else:
+            path = QFileDialog.getExistingDirectory(self, "Select folder")
+        if path: edit.setText(path)
+
+    def _start(self):
+        source, workbook = Path(self.source_ed.text().strip()), Path(self.workbook_ed.text().strip())
+        if not source.is_dir() or not workbook.is_file():
+            QMessageBox.warning(self, "Invalid input", "Select an existing posting folder and Excel workbook first."); return
+        output = Path(self.output_ed.text().strip()) if self.output_ed.text().strip() else source / "output"
+        self.output_ed.setText(str(output)); self.log_box.clear(); self.status.setText("Status: Processing..."); self.start_btn.setEnabled(False)
+        self.worker = CP52Worker(source, workbook, output)
+        self.worker.log.connect(self._log); self.worker.done.connect(self._done); self.worker.failed.connect(self._failed); self.worker.finished.connect(lambda: self.start_btn.setEnabled(True)); self.worker.start()
+
+    def _open_output(self):
+        path = Path(self.output_ed.text().strip()) if self.output_ed.text().strip() else Path.cwd() / "output"
+        path.mkdir(parents=True, exist_ok=True); os.startfile(str(path))
+
+    def _log(self, message): self.log_box.append(message)
+    def _done(self, result):
+        self.status.setText(f"Status: Completed — {result}"); QMessageBox.information(self, "Completed", f"Excel updated:\n{result}")
+    def _failed(self, message):
+        self.status.setText("Status: Failed"); QMessageBox.critical(self, "Processing error", message)
