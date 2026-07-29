@@ -13,6 +13,7 @@ from pitcsuite.tools.pdf_merge import PDFMergePanel
 from pitcsuite.tools.file_checker import SrNoCheckerPanel
 from pitcsuite.tools.double_cr import DoubleCRPanel
 from pitcsuite.tools.settings import SettingsPanel
+from pitcsuite.tools.integrated_tools import CP22TCheckerPanel, BillScraperPanel, FileMoverPanel
 
 
 TOOLS = [
@@ -25,6 +26,9 @@ TOOLS = [
     ("🔗  PDF Merge",                     PDFMergePanel),
     ("📂  File Checker",                  SrNoCheckerPanel),
     ("🔁  Double CR Checker",             DoubleCRPanel),
+    ("🧾  CP22T Posting Checker",          CP22TCheckerPanel),
+    ("🧮  Bill Scrapper",                  BillScraperPanel),
+    ("📦  File Mover",                     FileMoverPanel),
     ("⚙️   Settings",                     SettingsPanel),
 ]
 
