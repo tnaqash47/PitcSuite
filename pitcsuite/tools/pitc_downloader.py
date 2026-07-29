@@ -131,6 +131,73 @@ class PITCWorker(QThread):
                     pass
             return s
 
+        def amount_as_integer(value):
+            """Convert an amount to its whole-number value for row matching."""
+            try:
+                from decimal import Decimal, InvalidOperation
+                raw = str(value).strip()
+                match = re.search(r"-?\d[\d,]*(?:\.\d+)?", raw)
+                if not match:
+                    return None
+                return int(Decimal(match.group(0).replace(",", "")))
+            except (InvalidOperation, ValueError, TypeError):
+                return None
+
+        def exact_amount_rects(page, amount):
+            target = amount_as_integer(amount)
+            if target is None:
+                return []
+            rects = []
+            for word in page.get_text("words"):
+                if amount_as_integer(word[4]) == target:
+                    rects.append(fitz.Rect(word[:4]))
+            return rects
+
+        def text_has_exact_amount(text, amount):
+            target = amount_as_integer(amount)
+            if target is None:
+                return False
+            number_tokens = re.findall(r"(?<![\d.-])[\d,]+(?:\.\d+)?(?![\d.-])", text)
+            return any(amount_as_integer(token) == target for token in number_tokens)
+
+        def debit_amount_in_month_row(page, month, amount):
+            """Find the closest debit amount on the row containing the month.
+
+            Billing reports can differ by one rupee from the Excel value. The
+            row match deliberately ignores decimal places and prefers the
+            closest numeric value, while avoiding amounts from other rows.
+            """
+            target = amount_as_integer(amount)
+            if target is None:
+                return []
+
+            month_rects = page.search_for(format_month(month))
+            if not month_rects:
+                return []
+            month_rect = month_rects[0]
+            month_y = (month_rect.y0 + month_rect.y1) / 2
+
+            candidates = []
+            for word in page.get_text("words"):
+                word_rect = fitz.Rect(word[:4])
+                word_y = (word_rect.y0 + word_rect.y1) / 2
+                if word_rect.intersects(month_rect):
+                    continue
+                if abs(word_y - month_y) > max(8, month_rect.height * 1.5):
+                    continue
+                value = amount_as_integer(word[4])
+                if value is None or value < 0:
+                    continue
+                candidates.append((abs(value - target), word_rect))
+
+            if not candidates:
+                return []
+
+            candidates.sort(key=lambda item: item[0])
+            # A one-rupee tolerance handles the known posting difference but
+            # prevents an unrelated value on the same row being highlighted.
+            return [candidates[0][1]] if candidates[0][0] <= 1 else []
+
         def filter_pdf(pdf_path, month=None, amount=None):
             """Keep only the matching page and highlight month/amount."""
             temp_filtered = pdf_path.replace(".pdf", "_filtered.pdf")
@@ -140,9 +207,8 @@ class PITCWorker(QThread):
             found = False
             for page in reader.pages:
                 text  = (page.extract_text() or "").lower()
-                clean = text.replace(",", "")
                 m = month_str and month_str in text
-                a = amount and str(amount).replace(",", "") in clean
+                a = amount and text_has_exact_amount(text, amount)
                 if m or a:
                     writer.add_page(page)
                     found = True
@@ -156,12 +222,14 @@ class PITCWorker(QThread):
             doc = fitz.open(temp_filtered)
             for page in doc:
                 if month:
-                    for rect in page.search_for(format_month(month)):
+                    month_rects = page.search_for(format_month(month))
+                    for rect in month_rects:
                         page.add_highlight_annot(rect).update()
                 if amount:
-                    areas = page.search_for(str(amount).replace(",", ""))
-                    if not areas:
-                        areas = page.search_for(str(amount))
+                    if month:
+                        areas = debit_amount_in_month_row(page, month, amount)
+                    else:
+                        areas = exact_amount_rects(page, amount)
                     for rect in areas:
                         page.add_highlight_annot(rect).update()
             highlighted = pdf_path.replace(".pdf", "_highlighted.pdf")
