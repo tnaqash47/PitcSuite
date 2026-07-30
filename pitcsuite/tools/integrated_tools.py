@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QListWidget, QMessageBox, QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from pitcsuite.ui_helpers import START_BTN, STOP_BTN, hline, lbl
+from pitcsuite.ui_helpers import START_BTN, STOP_BTN, hline, lbl, notify
 
 
 class CP22TWorker(QThread):
@@ -92,9 +92,9 @@ class CP22TCheckerPanel(QWidget):
 
     def _log(self, message): self.log_box.append(message)
     def _done(self, output):
-        self.status.setText("Status: Completed"); QMessageBox.information(self, "Completed", f"Output saved to:\n{output}")
+        self.status.setText("Status: Completed"); notify(self, "Completed", f"Output saved to:\n{output}")
     def _failed(self, message):
-        self.status.setText("Status: Failed"); QMessageBox.critical(self, "Error", message)
+        self.status.setText("Status: Failed"); notify(self, "Error", message, critical=True)
 
 
 class BillScraperWorker(QThread):
@@ -152,9 +152,9 @@ class BillScraperPanel(QWidget):
         self.progress.setText(f"Processed {done} of {total} | {account}: {status}"); self.log_box.append(f"{account}: {status}")
     def _done(self, path, cancelled):
         self.start_btn.setEnabled(True); self.stop_btn.setEnabled(False); self.progress.setText("Stopped." if cancelled else "Completed")
-        if not cancelled: QMessageBox.information(self, "Completed", f"Workbook updated:\n{path}")
+        if not cancelled: notify(self, "Completed", f"Workbook updated:\n{path}")
     def _failed(self, message):
-        self.start_btn.setEnabled(True); self.stop_btn.setEnabled(False); QMessageBox.critical(self, "Error", message)
+        self.start_btn.setEnabled(True); self.stop_btn.setEnabled(False); notify(self, "Error", message, critical=True)
 
 
 class FileMoverWorker(QThread):
@@ -209,9 +209,9 @@ class FileMoverPanel(QWidget):
     def _done(self, moved, missing):
         self.status.setText(f"Status: Completed — moved {moved} file(s)")
         message = f"Moved {moved} file(s).\n\n" + ("Missing files:\n\n" + "\n".join(missing) if missing else "All files moved successfully.")
-        QMessageBox.information(self, "Completed", message)
+        notify(self, "Completed", message)
 
-    def _failed(self, message): self.status.setText("Status: Failed"); QMessageBox.critical(self, "Error", message)
+    def _failed(self, message): self.status.setText("Status: Failed"); notify(self, "Error", message, critical=True)
 
 
 class CP52Worker(QThread):
@@ -271,6 +271,6 @@ class CP52PostingCheckerPanel(QWidget):
 
     def _log(self, message): self.log_box.append(message)
     def _done(self, result):
-        self.status.setText(f"Status: Completed — {result}"); QMessageBox.information(self, "Completed", f"Excel updated:\n{result}")
+        self.status.setText(f"Status: Completed — {result}"); notify(self, "Completed", f"Excel updated:\n{result}")
     def _failed(self, message):
-        self.status.setText("Status: Failed"); QMessageBox.critical(self, "Processing error", message)
+        self.status.setText("Status: Failed"); notify(self, "Processing error", message, critical=True)

@@ -14,6 +14,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, QObject, QThread
 
 from pitcsuite.ui_helpers import lbl, hline, START_BTN, STOP_BTN
+
+class DoubleCRSignals(QObject):
+    log = Signal(str)
+    progress = Signal(int)
+    finished = Signal()
 from pitcsuite.templates import download_template
 from pitcsuite.config import config_path as _config_path
 
@@ -27,6 +32,10 @@ class DoubleCRPanel(QWidget):
         self._cr_file  = ""
         self._ac_file  = ""
         self._stop_req = False
+        self.signals = DoubleCRSignals()
+        self.signals.log.connect(self._log)
+        self.signals.progress.connect(self.progress_set)
+        self.signals.finished.connect(self.process_finished)
 
         layout = QVBoxLayout(self); layout.setSpacing(10)
         layout.addWidget(lbl("Double CR Checker", bold=True, color="#7eb8f7"))
@@ -68,7 +77,12 @@ class DoubleCRPanel(QWidget):
 
     def _log(self, msg):
         self.log_box.append(msg)
-        QApplication.processEvents()
+
+    def progress_set(self, value):
+        self.progress.setValue(value)
+
+    def process_finished(self):
+        self.btn_start.setEnabled(True); self.btn_stop.setEnabled(False)
 
     def _browse_cr(self):
         f, _ = QFileDialog.getOpenFileName(self, "Select CR File", "", "Excel Files (*.xlsx)")
@@ -107,15 +121,16 @@ class DoubleCRPanel(QWidget):
             self._log("❌ Please select both files"); return
         self._stop_req = False
         self.progress.setValue(0)
+        self.btn_start.setEnabled(False); self.btn_stop.setEnabled(True)
         threading.Thread(target=self._process, daemon=True).start()
 
     def _process(self):
         import pandas as pd
         os.makedirs(DOUBLE_CR_EXPORT_DIR, exist_ok=True)
 
-        self._log("📖 Reading CR file...")
+        self.signals.log.emit("📖 Reading CR file...")
         cr_df = pd.read_excel(self._cr_file, header=0, dtype={1: str})
-        self._log("📖 Reading AC file...")
+        self.signals.log.emit("📖 Reading AC file...")
         ac_df = pd.read_excel(self._ac_file, header=0, dtype={1: str})
 
         cr_ref_col = cr_df.columns[1]
@@ -129,11 +144,11 @@ class DoubleCRPanel(QWidget):
         total   = len(ac_df)
         output  = []
 
-        self._log("⚙ Processing records...")
+        self.signals.log.emit("⚙ Processing records...")
 
         for i, row in ac_df.iterrows():
             if self._stop_req:
-                self._log("⛔ Process stopped"); return
+                self.signals.log.emit("⛔ Process stopped"); self.signals.finished.emit(); return
 
             ref = str(row[ac_ref_col]).strip()
             matches = (grouped.get_group(ref) if ref in grouped.groups else pd.DataFrame())
@@ -150,7 +165,7 @@ class DoubleCRPanel(QWidget):
                     row_data.extend(["", "", ""])
 
             output.append(row_data)
-            self.progress.setValue(int((len(output) / total) * 100))
+            self.signals.progress.emit(int((len(output) / total) * 100))
 
         cols = ["Sr#", "Ref.#"]
         for i in range(1, DOUBLE_CR_MAX_OCC + 1):
@@ -161,9 +176,10 @@ class DoubleCRPanel(QWidget):
         out_path = os.path.join(DOUBLE_CR_EXPORT_DIR, "Output.xlsx")
         out_df.to_excel(out_path, index=False, engine="openpyxl")
 
-        self.progress.setValue(100)
-        self._log("✅ Completed successfully")
-        self._log(f"📁 Output saved at: {out_path}")
+        self.signals.progress.emit(100)
+        self.signals.log.emit("✅ Completed successfully")
+        self.signals.log.emit(f"📁 Output saved at: {out_path}")
+        self.signals.finished.emit()
 
 
 # ──────────────────────────────────────────────────────────────

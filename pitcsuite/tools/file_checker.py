@@ -13,14 +13,47 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject, QThread
 
-from pitcsuite.ui_helpers import lbl, hline, START_BTN, STOP_BTN
+from pitcsuite.ui_helpers import lbl, hline, START_BTN, STOP_BTN, notify
 from pitcsuite.templates import download_template
 from pitcsuite.config import config_path as _config_path
+
+class SrNoCheckerWorker(QThread):
+    progress = Signal(str)
+    done = Signal(bool, str)
+    failed = Signal(str)
+
+    def __init__(self, excel_path, folder_path):
+        super().__init__()
+        self.excel_path = excel_path
+        self.folder_path = folder_path
+        self.stop_requested = False
+
+    def stop(self):
+        self.stop_requested = True
+
+    def run(self):
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(self.excel_path); ws = wb.active
+            files_in_folder = os.listdir(self.folder_path)
+            row = 2
+            while not self.stop_requested:
+                sr_no = ws[f"A{row}"].value
+                if sr_no is None: break
+                found = any(os.path.splitext(f)[0] == str(sr_no) for f in files_in_folder)
+                ws[f"B{row}"] = "Found" if found else "Not Found"
+                self.progress.emit(f"Checking Sr. No.: {sr_no}")
+                row += 1
+            wb.save(self.excel_path)
+            self.done.emit(self.stop_requested, "Process stopped." if self.stop_requested else "Process completed successfully.")
+        except Exception as e:
+            self.failed.emit(str(e))
+
 
 class SrNoCheckerPanel(QWidget):
     def __init__(self):
         super().__init__()
-        self._stop_flag = False
+        self.worker = None
         layout = QVBoxLayout(self); layout.setSpacing(10)
         layout.addWidget(lbl("File Existence Checker", bold=True, color="#7eb8f7"))
         layout.addWidget(lbl("Checks if Sr. No. from Excel column A exists as a file in the selected folder.", color="#556"))
@@ -60,38 +93,25 @@ class SrNoCheckerPanel(QWidget):
         if p: self.folder_ed.setText(p)
 
     def _start(self):
-        self._stop_flag = False
-        threading.Thread(target=self._process, daemon=True).start()
+        if not self.excel_ed.text() or not self.folder_ed.text():
+            notify(self, "Error", "Please select Excel file and Folder", critical=True); return
+        self.btn_start.setEnabled(False); self.btn_stop.setEnabled(True)
+        self.worker = SrNoCheckerWorker(self.excel_ed.text(), self.folder_ed.text())
+        self.worker.progress.connect(self.status_lbl.setText)
+        self.worker.done.connect(self._done); self.worker.failed.connect(self._failed)
+        self.worker.finished.connect(lambda: (self.btn_start.setEnabled(True), self.btn_stop.setEnabled(False)))
+        self.worker.start()
 
     def _stop(self):
-        self._stop_flag = True
-        self.status_lbl.setText("Status: Stopped")
+        if self.worker and self.worker.isRunning():
+            self.worker.stop(); self.status_lbl.setText("Status: Stopping…")
 
-    def _process(self):
-        from openpyxl import load_workbook
-        excel_path  = self.excel_ed.text()
-        folder_path = self.folder_ed.text()
+    def _done(self, stopped, message):
+        self.status_lbl.setText("Status: Stopped" if stopped else "Status: Completed")
+        if not stopped: notify(self, "Done", message)
 
-        if not excel_path or not folder_path:
-            QMessageBox.critical(self, "Error", "Please select Excel file and Folder"); return
-
-        try:
-            wb = load_workbook(excel_path); ws = wb.active
-            files_in_folder = os.listdir(folder_path)
-            row = 2
-            while True:
-                if self._stop_flag: break
-                sr_no = ws[f"A{row}"].value
-                if sr_no is None: break
-                found = any(os.path.splitext(f)[0] == str(sr_no) for f in files_in_folder)
-                ws[f"B{row}"] = "Found" if found else "Not Found"
-                self.status_lbl.setText(f"Checking Sr. No.: {sr_no}")
-                row += 1
-            wb.save(excel_path)
-            self.status_lbl.setText("Status: Completed")
-            QMessageBox.information(self, "Done", "Process Completed Successfully")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+    def _failed(self, message):
+        self.status_lbl.setText("Status: Failed"); notify(self, "Error", message, critical=True)
 
 
 # ──────────────────────────────────────────────────────────────

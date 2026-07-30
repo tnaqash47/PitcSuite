@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject, QThread
 
-from pitcsuite.ui_helpers import lbl, hline, START_BTN, STOP_BTN
+from pitcsuite.ui_helpers import lbl, hline, START_BTN, STOP_BTN, notify
 from pitcsuite.templates import download_template
 from pitcsuite.config import config_path as _config_path
 
@@ -87,7 +87,7 @@ class ExtractPagePanel(QWidget):
 
     def on_finished(self):
         self.btn_start.setEnabled(True); self.btn_stop.setEnabled(False)
-        QMessageBox.information(self, "Done", "Extraction completed.")
+        notify(self, "Done", "Extraction completed.")
 
     def start(self):
         if not self.pdf_ed.text() or not self.excel_ed.text():
@@ -95,6 +95,7 @@ class ExtractPagePanel(QWidget):
         self._stop_flag = False
         self.btn_start.setEnabled(False); self.btn_stop.setEnabled(True)
         self.log_box.clear()
+        self._job = (self.pdf_ed.text(), self.excel_ed.text(), self.out_ed.text())
         threading.Thread(target=self.process, daemon=True).start()
 
     def stop(self):
@@ -119,11 +120,10 @@ class ExtractPagePanel(QWidget):
                     pass
             return s
 
-        pdf_folder = self.pdf_ed.text()
-        out_folder = self.out_ed.text()
+        pdf_folder, excel_path, out_folder = self._job
         os.makedirs(out_folder, exist_ok=True)
 
-        wb = load_workbook(self.excel_ed.text()); ws = wb.active
+        wb = load_workbook(excel_path); ws = wb.active
         last_row = ws.max_row
         self.signals.progress.emit(0, last_row - 1)
 
@@ -212,7 +212,7 @@ class ExtractPagePanel(QWidget):
 
             self.signals.progress.emit(row - 1, last_row - 1)
 
-        wb.save(self.excel_ed.text())
+        wb.save(excel_path)
         self.signals.finished.emit()
 
 # ──────────────────────────────────────────────────────────────

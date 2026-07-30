@@ -1,4 +1,5 @@
-from PySide6.QtWidgets import QLabel, QFrame
+from PySide6.QtWidgets import QLabel, QFrame, QMessageBox
+from PySide6.QtCore import Qt
 
 DARK_STYLE = """
 QMainWindow, QWidget {
@@ -38,7 +39,11 @@ QPushButton {
 }
 QPushButton:hover { background: #2e3340; border-color: #4a90d9; color: #fff; }
 QPushButton:pressed { background: #1e2430; }
-QPushButton:disabled { color: #555; border-color: #2a2a2a; }
+QPushButton:disabled {
+    background: #343a46;
+    color: #8791a3;
+    border-color: #3d4553;
+}
 QTextEdit {
     background: #12151c;
     border: 1px solid #2e3340;
@@ -123,6 +128,20 @@ def hline():
     f.setFrameShape(QFrame.HLine)
     f.setStyleSheet("color:#2e3340;")
     return f
+
+
+def notify(parent, title, message, critical=False):
+    """Show a result without blocking the Qt event loop with exec()."""
+    box = QMessageBox(QMessageBox.Critical if critical else QMessageBox.Information,
+                      title, message, parent=parent)
+    box.setAttribute(Qt.WA_DeleteOnClose)
+    active = getattr(parent, "_active_notifications", None)
+    if active is None:
+        active = parent._active_notifications = []
+    active.append(box)
+    box.finished.connect(lambda: active.remove(box) if box in active else None)
+    box.open()
+    return box
 
 
 # ──────────────────────────────────────────────────────────────

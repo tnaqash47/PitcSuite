@@ -78,7 +78,8 @@ def normalized_key(value):
 
 def is_preserved_meter_key(key):
     return (
-        key == "kvarh_units"
+        key.startswith("kvarh_present_")
+        or key == "kvarh_units"
         or key.startswith("kvarh_units_")
         or key.startswith("mdi_read_")
         or key.startswith("mdi_mf_")
@@ -102,7 +103,7 @@ def is_dropped(name, source_col=None, legacy_columns=False):
         key in DROP_EXACT
         or "previous" in key
         or "bill_history" in key
-        or key.startswith(("kvarh_meter_", "kvarh_present_", "kvarh_mf_", "mdi_meter_"))
+        or key.startswith(("kvarh_meter_", "kvarh_mf_", "mdi_meter_"))
         or key.startswith("bill_history")
         or key.startswith(("table_4_", "table_5_", "table_6_"))
         or key in {"account_no", "raw_bill_text"}
@@ -129,6 +130,7 @@ GENERAL_LABELS = {
     "current bill": "current_bill",
     "arrears": "arrears",
     "installment": "installment",
+    "adjustment": "adjustments",
     "adjustments": "adjustments",
     "grand total": "grand_total",
     "ntn no": "ntn_no",
@@ -155,6 +157,7 @@ def order_output_headers(headers):
         *(f"kwh_present_{i}" for i in range(1, 5)),
         *(f"kwh_mf_{i}" for i in range(1, 5)),
         *(f"kwh_units_{i}" for i in range(1, 5)),
+        *(f"kvarh_present_{i}" for i in range(1, 5)),
         *(f"kvarh_units_{i}" for i in range(1, 5)),
         *(f"mdi_read_{i}" for i in range(1, 5)),
         *(f"mdi_mf_{i}" for i in range(1, 5)),
@@ -187,6 +190,14 @@ class PITCBillScraper:
         if not value or is_dropped(name):
             return
         key = canonical_label(name)
+        # The general bill sometimes exposes the Urdu label "ایڈجسٹمنٹ"
+        # where the amount should be. Never export that label by itself;
+        # retain an adjustment only when the cell contains a numeric amount.
+        if key == "adjustments":
+            numeric_adjustment = re.search(r"[-+]?\d[\d,]*(?:\.\d+)?", value)
+            if not numeric_adjustment:
+                return
+            value = numeric_adjustment.group(0)
         # Meter readings sometimes arrive as "I 123" / "E 123".  Keep the
         # numeric reading itself, regardless of whether the source is MDI,
         # KWH, KVARH, or a general-bill table.
@@ -430,6 +441,11 @@ class PITCBillScraper:
         # columns already present in an existing workbook.
         if "feeder" not in {name for _, name in kept}:
             kept.append((None, "feeder"))
+        # Keep the adjustment column in every exported workbook. Individual
+        # accounts may have no adjustment, but their cells should remain blank
+        # rather than changing the shared schema between rows.
+        if "adjustments" not in {name for _, name in kept}:
+            kept.append((None, "adjustments"))
         kept.append((next((col for col, name in enumerate(old_headers, 1) if normalized_key(name) == "scrape_status"), None), "scrape_status"))
         if kept[-1][0] is None:
             kept[-1] = (None, "scrape_status")
@@ -611,4 +627,3 @@ class BillScraperApp(tk.Tk):
 
 if __name__ == "__main__":
     BillScraperApp().mainloop()
-

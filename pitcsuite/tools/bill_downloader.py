@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject, QThread
 
-from pitcsuite.ui_helpers import lbl, hline, START_BTN, STOP_BTN
+from pitcsuite.ui_helpers import lbl, hline, START_BTN, STOP_BTN, notify
 from pitcsuite.templates import download_template
 from pitcsuite.config import config_path as _config_path
 
@@ -109,7 +109,9 @@ class BillSoftPanel(QWidget):
                 QMessageBox.warning(self, "Error", "Select Excel file first"); return
             self.stop_flag = False; self.pause_flag = False
             self.btn_start.setText("■  STOP"); self.btn_start.setStyleSheet(STOP_BTN)
-            threading.Thread(target=self.run_worker, daemon=True).start()
+            job = (self.ed_excel.text(), self.ed_out.text(), self.ed_url.text(),
+                   self.chk_headless.isChecked(), self.chk_sr.isChecked(), self.chk_sep.isChecked())
+            threading.Thread(target=self.run_worker, args=(job,), daemon=True).start()
         else:
             self.stop_flag = True; self.btn_start.setText("▶  START"); self.btn_start.setStyleSheet(START_BTN)
 
@@ -125,7 +127,7 @@ class BillSoftPanel(QWidget):
         self.btn_start.setText("▶  START"); self.btn_start.setStyleSheet(START_BTN)
         self.btn_pause.setText("⏸  PAUSE")
 
-        QMessageBox.information(self, "Done", "E/Bills Downloader completed.")
+        notify(self, "Done", "E/Bills Downloader completed.")
 
     def _unique_pdf(self, folder, base):
         p = os.path.join(folder, f"{base}.pdf")
@@ -214,7 +216,7 @@ class BillSoftPanel(QWidget):
                     raise
                 time.sleep(0.2)
 
-    def run_worker(self):
+    def run_worker(self, job):
         try:
             from selenium import webdriver
             from selenium.webdriver.common.by import By
@@ -228,12 +230,12 @@ class BillSoftPanel(QWidget):
         except ImportError as e:
             self.signals.log.emit(f"ERROR: Missing library — {e}"); self.signals.finished.emit(); return
 
-        excel = self.ed_excel.text(); out = self.ed_out.text(); url = self.ed_url.text()
+        excel, out, url, headless, add_sr, separate = job
         os.makedirs(out, exist_ok=True)
         wb = load_workbook(excel); sh = wb.active
 
         opts = webdriver.ChromeOptions()
-        if self.chk_headless.isChecked(): opts.add_argument("--headless=new")
+        if headless: opts.add_argument("--headless=new")
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
 
         total = sh.max_row - 1; done = 0; collected = []
@@ -346,14 +348,14 @@ class BillSoftPanel(QWidget):
             pdf_name = str(sr).strip() if sr else ac
             p = self._unique_pdf(out, pdf_name)
             with open(p, "wb") as f: f.write(base64.b64decode(pdf["data"]))
-            self._fit_pdf_to_a4(p, sr if self.chk_sr.isChecked() and sr else None)
+            self._fit_pdf_to_a4(p, sr if add_sr and sr else None)
             collected.append((int(sr) if sr and str(sr).isdigit() else 999999, p))
             sh.cell(r, 3).value = "Saved"; self.signals.log.emit("→ PDF created"); wb.save(excel)
             done += 1; self.signals.progress.emit(done, total)
 
         driver.quit()
-        if not self.chk_sep.isChecked() and collected:
-            if self.chk_sr.isChecked(): collected.sort(key=lambda x: x[0])
+        if not separate and collected:
+            if add_sr: collected.sort(key=lambda x: x[0])
             merged = self._unique_pdf(out, os.path.splitext(os.path.basename(excel))[0])
             from pypdf import PdfWriter, PdfReader
             writer = PdfWriter()

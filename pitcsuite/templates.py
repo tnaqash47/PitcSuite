@@ -1,4 +1,5 @@
-from PySide6.QtWidgets import QFileDialog, QMessageBox
+from PySide6.QtWidgets import QFileDialog
+from pitcsuite.ui_helpers import notify
 
 def download_template(parent, headers, default_name, sample_rows=None):
     from openpyxl import Workbook as _WB
@@ -17,7 +18,7 @@ def download_template(parent, headers, default_name, sample_rows=None):
         cell.font = hdr_font; cell.fill = hdr_fill; cell.alignment = hdr_align
         ws.column_dimensions[cell.column_letter].width = max(len(h) + 6, 16)
     wb.save(path)
-    QMessageBox.information(parent, "Template Saved", f"Template saved to:\n{path}")
+    notify(parent, "Template Saved", f"Template saved to:\n{path}")
 
 
 # ──────────────────────────────────────────────────────────────

@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject, QThread
 
-from pitcsuite.ui_helpers import lbl, hline, START_BTN, STOP_BTN
+from pitcsuite.ui_helpers import lbl, hline, START_BTN, STOP_BTN, notify
 from pitcsuite.templates import download_template
 from pitcsuite.config import config_path as _config_path
 
@@ -43,10 +43,39 @@ class PITCWorker(QThread):
         self.print_x       = print_x
         self.print_y       = print_y
         self.running       = True
+        self.stopped       = False
+        self._driver       = None
+        self._driver_lock  = threading.Lock()
 
-    def stop(self): self.running = False
+    def stop(self):
+        self.running = False
+        self.stopped = True
+        # Closing Chrome from a short-lived helper prevents a Selenium call in
+        # the worker from keeping the application UI hostage.  The GUI thread
+        # never waits for this operation.
+        with self._driver_lock:
+            driver = self._driver
+        if driver:
+            threading.Thread(target=self._close_driver, args=(driver,), daemon=True).start()
+
+    @staticmethod
+    def _close_driver(driver):
+        try:
+            driver.quit()
+        except Exception:
+            pass
 
     def run(self):
+        try:
+            self._run_impl()
+        finally:
+            with self._driver_lock:
+                driver = self._driver
+                self._driver = None
+            if driver:
+                self._close_driver(driver)
+
+    def _run_impl(self):
         try:
             from selenium import webdriver
             from selenium.webdriver.chrome.service import Service
@@ -98,7 +127,7 @@ class PITCWorker(QThread):
         # ── PDF helpers ──
         def wait_for_new_pdf(existing, timeout=60):
             start = time.time()
-            while time.time() - start < timeout:
+            while self.running and time.time() - start < timeout:
                 pdfs = {f for f in os.listdir(dl)
                         if f.lower().endswith(".pdf") and not f.lower().endswith(".crdownload")}
                 diff = pdfs - existing
@@ -107,7 +136,10 @@ class PITCWorker(QThread):
                     if os.path.getsize(path) < 5000:
                         raise Exception("Invalid PDF (login/session issue)")
                     return path
-                time.sleep(0.5)
+                if self.running:
+                    time.sleep(0.5)
+            if not self.running:
+                raise InterruptedError("Download stopped by user")
             raise Exception("PDF not downloaded within timeout")
 
         def get_unique_name(base_name):
@@ -272,6 +304,8 @@ class PITCWorker(QThread):
                 "safebrowsing.enabled": False,
             })
             drv = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+            with self._driver_lock:
+                self._driver = drv
             return drv, WebDriverWait(drv, 40)
 
         def do_login(drv, wt):
@@ -429,7 +463,6 @@ class PITCWorker(QThread):
                     time.sleep(self.warmup)
 
         wb.save(self.excel)
-        driver.quit()
 
 
 class PITCPanel(QWidget):
@@ -548,11 +581,14 @@ class PITCPanel(QWidget):
 
     def halt(self):
         if self.worker and self.worker.isRunning():
-            self.worker.stop(); self.worker.wait()
+            self.worker.stop()
+            self.btn_stop.setEnabled(False)
+            self.log_box.append("⛔ Stop requested; closing Chrome safely…")
 
     def done(self):
         self.btn_start.setEnabled(True); self.btn_stop.setEnabled(False)
-        QMessageBox.information(self, "Done", "PITC Downloader completed.")
+        if not self.worker or not self.worker.stopped:
+            notify(self, "Done", "PITC Downloader completed.")
 
 
 # ──────────────────────────────────────────────────────────────
