@@ -120,6 +120,25 @@ def record_amount_spans(
     )
 
 
+def amount_spans(text: str, wanted: float) -> tuple[list[tuple[int, int]], bool]:
+    """Find the closest matching amount in a selected continuation block."""
+    candidates = []
+    for match in AMOUNT_TOKEN.finditer(text):
+        try:
+            difference = abs(float(match.group().replace(",", "")) - wanted)
+        except ValueError:
+            continue
+        if difference <= SMART_AMOUNT_TOLERANCE:
+            candidates.append((difference, match.start(), match.end()))
+    if not candidates:
+        return [], False
+    closest = min(item[0] for item in candidates)
+    return (
+        [(start, end) for difference, start, end in candidates if difference == closest],
+        closest == 0,
+    )
+
+
 def pdf_word_rows(words: list[dict]) -> list[list[dict]]:
     """Group pdfplumber words into visual rows from top to bottom."""
     rows: list[list[dict]] = []
@@ -186,41 +205,47 @@ def find_match(pages: list[SourcePage], raw_account: object, amount: object) -> 
                 if page_index + 1 < len(pages):
                     next_page = pages[page_index + 1]
                     if next_page.source_path == page.source_path and next_page.source_index == page.source_index + 1:
-                        continuation = ACCOUNT_LINE.search(next_page.text)
-                        if continuation:
-                            next_text = next_page.text[:continuation.start()]
-                        else:
-                            next_text = next_page.text
-                        next_lines = next_text.splitlines(keepends=True)
-                        # A new source page normally repeats the complete
-                        # CP-52 heading. Skip it and take only the next
-                        # record rows needed to complete the AC found at the
-                        # bottom of the previous page.
+                        next_lines = next_page.text.splitlines(keepends=True)
+                        # Keep the repeated next-page heading, then append
+                        # only its first posting record. This preserves the
+                        # page context shown in the source while avoiding all
+                        # later records from the next page.
                         separator = next(
                             (i for i, line in enumerate(next_lines) if re.fullmatch(r"\s*-{20,}\s*", line)),
                             None,
                         )
                         if separator is not None:
-                            next_lines = next_lines[separator + 1:]
-                        next_text = "".join(next_lines[:RECORD_AMOUNT_ROW_OFFSET])
+                            body = next_lines[separator + 1:]
+                            record_starts = [
+                                i for i, line in enumerate(body)
+                                if re.match(r"\s*\d+\s+\d{2}-\d", line)
+                            ]
+                            record_end = record_starts[1] if len(record_starts) > 1 else len(body)
+                            next_lines = next_lines[:separator + 1] + body[:record_end]
+                        else:
+                            continuation = ACCOUNT_LINE.search(next_page.text)
+                            if continuation:
+                                next_lines = next_page.text[:continuation.start()].splitlines(keepends=True)
+                            else:
+                                next_lines = next_lines[:RECORD_AMOUNT_ROW_OFFSET]
+                        next_text = "".join(next_lines)
                         if next_text.strip():
-                            # Keep only the searched AC's final record tail;
-                            # repeated headings and unrelated preceding rows
-                            # are what caused the continuation amount to be
-                            # pushed outside the generated page.
-                            account_start = min(start for start, _ in account_hits)
-                            record_start = page.text.rfind("\n", 0, account_start) + 1
-                            record_tail = page.text[record_start:].strip("\r\n")
-                            combined_text = record_tail + "\n" + next_text.lstrip("\r\n")
+                            # Preserve the entire current page, including all
+                            # previous AC records, and append the next page's
+                            # heading/first record as one compact output page.
+                            combined_text = page.text.rstrip("\r\n") + "\n" + next_text.lstrip("\r\n")
                             combined_page = SourcePage(
                                 page.number, combined_text, page.source_index, page.source_path, True
                             )
                             combined_account_hits = []
                             for pattern in (re.escape(dashed), re.escape(digits)):
                                 combined_account_hits.extend((m.start(), m.end()) for m in re.finditer(pattern, combined_text, re.IGNORECASE))
-                            combined_amount_hits, combined_amount_exact = record_amount_spans(
-                                combined_text, combined_account_hits, wanted_amount
-                            )
+                            continuation_offset = combined_text.find(next_text.strip())
+                            continuation_hits, combined_amount_exact = amount_spans(next_text, wanted_amount)
+                            combined_amount_hits = [
+                                (continuation_offset + start, continuation_offset + end)
+                                for start, end in continuation_hits
+                            ]
                             if combined_amount_hits:
                                 return MatchResult(combined_page, combined_account_hits, combined_amount_hits, True, combined_amount_exact)
     if near_result is not None:
@@ -262,16 +287,32 @@ def add_sr_overlay(page, sr: object, output: Path) -> None:
 def render_text_page(page: SourcePage, result: MatchResult, sr: object, output: Path) -> None:
     # Posting-list TXT output is intended for landscape A4 printing.
     page_width, page_height = landscape(A4)
-    margin_x, margin_y = 12, 18
+    margin_x, margin_y = (6, 8) if page.compact_output else (12, 18)
     lines = page.text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     max_len = max((len(line) for line in lines), default=1)
-    font_size = min(8.5, max(4.5, (page_width - 2 * margin_x) / (max_len * 0.60)))
-    leading = min(8.2, max(5.1, (page_height - 2 * margin_y) / max(len(lines), 1)))
+    width_font_size = (page_width - 2 * margin_x) / (max_len * 0.60)
+    # A boundary page can arrive from an older/serialized SourcePage without
+    # its marker. A long page is unambiguously the same fit-to-A4 case.
+    fit_to_a4 = page.compact_output or len(lines) > 35
+    if fit_to_a4:
+        # Boundary output retains the full previous page plus the next
+        # heading/record. Condense only this combined page so no prior AC
+        # rows are lost and the continuation amount still fits.
+        margin_x, margin_y = 6, 8
+        width_font_size = (page_width - 2 * margin_x) / (max_len * 0.60)
+        available_height = page_height - margin_y - 6
+        leading = min(12.0, available_height / max(len(lines), 1))
+        # Use more of the A4 canvas while preserving the fixed-width column
+        # alignment of the posting export.
+        font_size = min(11.0, width_font_size, max(3.0, leading * 0.88))
+    else:
+        font_size = min(8.5, max(4.5, width_font_size))
+        leading = min(8.2, max(5.1, (page_height - 2 * margin_y) / max(len(lines), 1)))
     c = canvas.Canvas(str(output), pagesize=(page_width, page_height))
     c.setFont("Courier", font_size)
     for line_no, line in enumerate(lines):
         y = page_height - margin_y - (line_no + 1) * leading
-        if y < 10:
+        if y < 10 and not fit_to_a4:
             break
         spans = []
         for start, end in result.account_hits + result.amount_hits:

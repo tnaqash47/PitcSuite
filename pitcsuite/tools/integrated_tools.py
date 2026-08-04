@@ -224,8 +224,13 @@ class CP52Worker(QThread):
 
     def run(self):
         try:
-            from pitcsuite.tools.cp52_posting_checker_logic import process_workbook
-            result = process_workbook(self.source_dir, self.workbook, self.output_dir, self.log.emit)
+            # Reload during development so a long-running VS Code session
+            # does not keep using an older CP-52 renderer after the source
+            # file has been edited.
+            import importlib
+            from pitcsuite.tools import cp52_posting_checker_logic
+            logic = importlib.reload(cp52_posting_checker_logic)
+            result = logic.process_workbook(self.source_dir, self.workbook, self.output_dir, self.log.emit)
             self.done.emit(str(result))
         except Exception as exc:
             self.failed.emit(str(exc))
