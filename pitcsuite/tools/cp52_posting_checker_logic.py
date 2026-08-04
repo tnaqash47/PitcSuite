@@ -30,6 +30,7 @@ class SourcePage:
     text: str
     source_index: int
     source_path: Path
+    compact_output: bool = False
 
 
 @dataclass
@@ -189,13 +190,31 @@ def find_match(pages: list[SourcePage], raw_account: object, amount: object) -> 
                         if continuation:
                             next_text = next_page.text[:continuation.start()]
                         else:
-                            # If the next AC is not on the following page,
-                            # retain the three continuation rows needed by
-                            # this record without copying the whole page.
-                            next_text = "".join(next_page.text.splitlines(keepends=True)[:RECORD_AMOUNT_ROW_OFFSET])
+                            next_text = next_page.text
+                        next_lines = next_text.splitlines(keepends=True)
+                        # A new source page normally repeats the complete
+                        # CP-52 heading. Skip it and take only the next
+                        # record rows needed to complete the AC found at the
+                        # bottom of the previous page.
+                        separator = next(
+                            (i for i, line in enumerate(next_lines) if re.fullmatch(r"\s*-{20,}\s*", line)),
+                            None,
+                        )
+                        if separator is not None:
+                            next_lines = next_lines[separator + 1:]
+                        next_text = "".join(next_lines[:RECORD_AMOUNT_ROW_OFFSET])
                         if next_text.strip():
-                            combined_text = page.text.rstrip("\r\n") + "\n" + next_text.lstrip("\r\n")
-                            combined_page = SourcePage(page.number, combined_text, page.source_index, page.source_path)
+                            # Keep only the searched AC's final record tail;
+                            # repeated headings and unrelated preceding rows
+                            # are what caused the continuation amount to be
+                            # pushed outside the generated page.
+                            account_start = min(start for start, _ in account_hits)
+                            record_start = page.text.rfind("\n", 0, account_start) + 1
+                            record_tail = page.text[record_start:].strip("\r\n")
+                            combined_text = record_tail + "\n" + next_text.lstrip("\r\n")
+                            combined_page = SourcePage(
+                                page.number, combined_text, page.source_index, page.source_path, True
+                            )
                             combined_account_hits = []
                             for pattern in (re.escape(dashed), re.escape(digits)):
                                 combined_account_hits.extend((m.start(), m.end()) for m in re.finditer(pattern, combined_text, re.IGNORECASE))
@@ -246,18 +265,14 @@ def render_text_page(page: SourcePage, result: MatchResult, sr: object, output: 
     margin_x, margin_y = 12, 18
     lines = page.text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     max_len = max((len(line) for line in lines), default=1)
-    width_font_size = (page_width - 2 * margin_x) / (max_len * 0.60)
-    # The AC can be the final row of a source page while its amount is in
-    # continuation rows. Fit the complete combined record instead of letting
-    # the old minimum leading clip those rows at the bottom of the PDF.
-    bottom_margin = 10
-    available_height = page_height - margin_y - bottom_margin
-    leading = min(8.2, available_height / max(len(lines), 1))
-    font_size = min(8.5, width_font_size, max(3.0, leading * 0.90))
+    font_size = min(8.5, max(4.5, (page_width - 2 * margin_x) / (max_len * 0.60)))
+    leading = min(8.2, max(5.1, (page_height - 2 * margin_y) / max(len(lines), 1)))
     c = canvas.Canvas(str(output), pagesize=(page_width, page_height))
     c.setFont("Courier", font_size)
     for line_no, line in enumerate(lines):
         y = page_height - margin_y - (line_no + 1) * leading
+        if y < 10:
+            break
         spans = []
         for start, end in result.account_hits + result.amount_hits:
             # absolute spans are mapped to the current line below
