@@ -70,20 +70,66 @@ def amount_matches(token: str, wanted: float) -> bool:
         return False
 
 
-def amount_spans(text: str, wanted: float) -> tuple[list[tuple[int, int]], bool]:
+RECORD_AMOUNT_ROW_OFFSET = 3
+
+
+def text_line_bounds(text: str) -> list[tuple[int, int]]:
+    """Return absolute character bounds for each displayed text row."""
+    bounds = []
+    start = 0
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        bounds.append((start, start + len(line)))
+        start += len(line) + 1
+    return bounds
+
+
+def record_amount_spans(
+    text: str, account_hits: list[tuple[int, int]], wanted: float | None
+) -> tuple[list[tuple[int, int]], bool]:
+    """Find the requested amount only on the third row after the AC row."""
+    if wanted is None:
+        return [], False
+    bounds = text_line_bounds(text)
+    account_rows = {
+        row_number
+        for row_number, (line_start, line_end) in enumerate(bounds)
+        if any(start < line_end and end > line_start for start, end in account_hits)
+    }
+    target_rows = {row + RECORD_AMOUNT_ROW_OFFSET for row in account_rows}
     candidates = []
-    for m in AMOUNT_TOKEN.finditer(text):
+    for match in AMOUNT_TOKEN.finditer(text):
+        row_number = next(
+            (i for i, (line_start, line_end) in enumerate(bounds) if line_start <= match.start() <= line_end),
+            None,
+        )
+        if row_number not in target_rows:
+            continue
         try:
-            difference = abs(float(m.group().replace(",", "")) - wanted)
+            difference = abs(float(match.group().replace(",", "")) - wanted)
         except ValueError:
             continue
         if difference <= SMART_AMOUNT_TOLERANCE:
-            candidates.append((difference, m.start(), m.end()))
+            candidates.append((difference, match.start(), match.end()))
     if not candidates:
         return [], False
     closest = min(item[0] for item in candidates)
-    selected = [(start, end) for difference, start, end in candidates if difference == closest]
-    return selected, closest == 0
+    return (
+        [(start, end) for difference, start, end in candidates if difference == closest],
+        closest == 0,
+    )
+
+
+def pdf_word_rows(words: list[dict]) -> list[list[dict]]:
+    """Group pdfplumber words into visual rows from top to bottom."""
+    rows: list[list[dict]] = []
+    for word in sorted(words, key=lambda item: (float(item["top"]), float(item["x0"]))):
+        height = float(word["bottom"]) - float(word["top"])
+        tolerance = max(3.0, height * 0.6)
+        if rows and abs(float(word["top"]) - float(rows[-1][0]["top"])) <= tolerance:
+            rows[-1].append(word)
+        else:
+            rows.append([word])
+    return rows
 
 
 def split_text_pages(path: Path) -> list[SourcePage]:
@@ -122,7 +168,7 @@ def find_match(pages: list[SourcePage], raw_account: object, amount: object) -> 
         for pattern in (re.escape(dashed), re.escape(digits)):
             account_hits.extend((m.start(), m.end()) for m in re.finditer(pattern, page.text, re.IGNORECASE))
         if account_hits:
-            amount_hits, amount_exact = amount_spans(page.text, wanted_amount) if wanted_amount is not None else ([], False)
+            amount_hits, amount_exact = record_amount_spans(page.text, account_hits, wanted_amount)
             result = MatchResult(page, account_hits, amount_hits, wanted_amount is None or bool(amount_hits), amount_exact)
             if wanted_amount is None:
                 return result
@@ -132,21 +178,30 @@ def find_match(pages: list[SourcePage], raw_account: object, amount: object) -> 
                 near_result = result
             if account_only_result is None:
                 account_only_result = MatchResult(page, account_hits, [], False, False)
-            # A fixed-width TXT export can split the last account line from its
-            # details. Include the beginning of the next TXT page when testing
-            # the amount, so the output page can show the complete record.
+            # A posting export can split the last AC row from its details.
+            # Include the beginning of the next TXT page when testing the
+            # third record row, so the output page shows the complete record.
             if wanted_amount is not None and not amount_hits and page.source_path.suffix.lower() == ".txt":
                 if page_index + 1 < len(pages):
                     next_page = pages[page_index + 1]
                     if next_page.source_path == page.source_path and next_page.source_index == page.source_index + 1:
                         continuation = ACCOUNT_LINE.search(next_page.text)
                         if continuation:
-                            combined_text = page.text.rstrip() + "\n\n" + next_page.text[:continuation.start()]
+                            next_text = next_page.text[:continuation.start()]
+                        else:
+                            # If the next AC is not on the following page,
+                            # retain the three continuation rows needed by
+                            # this record without copying the whole page.
+                            next_text = "".join(next_page.text.splitlines(keepends=True)[:RECORD_AMOUNT_ROW_OFFSET])
+                        if next_text.strip():
+                            combined_text = page.text.rstrip("\r\n") + "\n" + next_text.lstrip("\r\n")
                             combined_page = SourcePage(page.number, combined_text, page.source_index, page.source_path)
                             combined_account_hits = []
                             for pattern in (re.escape(dashed), re.escape(digits)):
                                 combined_account_hits.extend((m.start(), m.end()) for m in re.finditer(pattern, combined_text, re.IGNORECASE))
-                            combined_amount_hits, combined_amount_exact = amount_spans(combined_text, wanted_amount)
+                            combined_amount_hits, combined_amount_exact = record_amount_spans(
+                                combined_text, combined_account_hits, wanted_amount
+                            )
                             if combined_amount_hits:
                                 return MatchResult(combined_page, combined_account_hits, combined_amount_hits, True, combined_amount_exact)
     if near_result is not None:
@@ -191,14 +246,18 @@ def render_text_page(page: SourcePage, result: MatchResult, sr: object, output: 
     margin_x, margin_y = 12, 18
     lines = page.text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     max_len = max((len(line) for line in lines), default=1)
-    font_size = min(8.5, max(4.5, (page_width - 2 * margin_x) / (max_len * 0.60)))
-    leading = min(8.2, max(5.1, (page_height - 2 * margin_y) / max(len(lines), 1)))
+    width_font_size = (page_width - 2 * margin_x) / (max_len * 0.60)
+    # The AC can be the final row of a source page while its amount is in
+    # continuation rows. Fit the complete combined record instead of letting
+    # the old minimum leading clip those rows at the bottom of the PDF.
+    bottom_margin = 10
+    available_height = page_height - margin_y - bottom_margin
+    leading = min(8.2, available_height / max(len(lines), 1))
+    font_size = min(8.5, width_font_size, max(3.0, leading * 0.90))
     c = canvas.Canvas(str(output), pagesize=(page_width, page_height))
     c.setFont("Courier", font_size)
     for line_no, line in enumerate(lines):
         y = page_height - margin_y - (line_no + 1) * leading
-        if y < 10:
-            break
         spans = []
         for start, end in result.account_hits + result.amount_hits:
             # absolute spans are mapped to the current line below
@@ -236,12 +295,16 @@ def render_pdf_page(source_path: Path, page_number: int, result: MatchResult, ac
     targets = [dashed_account(account), compact_digits(account)]
     wanted = []
     raw_account = result.page.text
+    rows = pdf_word_rows(words)
     # Match the requested account directly against extracted words; this avoids highlighting unrelated numbers.
-    for word in words:
-        normalized = word["text"].replace(" ", "")
-        if normalized in targets:
+    account_row_numbers = set()
+    for row_number, row in enumerate(rows):
+        for word in row:
+            normalized = word["text"].replace(" ", "")
+            if normalized not in targets:
+                continue
+            account_row_numbers.add(row_number)
             wanted.append((word["x0"] - 1, height - word["bottom"] - 1, word["x1"] - word["x0"] + 2, word["bottom"] - word["top"] + 2))
-    wanted_amount = None
     # The amount result spans are sufficient to identify that an amount exists; highlight matching numeric words.
     amount_value = None
     for m in AMOUNT_TOKEN.finditer(raw_account):
@@ -249,9 +312,17 @@ def render_pdf_page(source_path: Path, page_number: int, result: MatchResult, ac
             amount_value = numeric_value(m.group())
             break
     if amount_value is not None:
-        for word in words:
-            if amount_matches(word["text"], amount_value):
-                wanted.append((word["x0"] - 1, height - word["bottom"] - 1, word["x1"] - word["x0"] + 2, word["bottom"] - word["top"] + 2))
+        target_rows = {
+            row_number + RECORD_AMOUNT_ROW_OFFSET for row_number in account_row_numbers
+        }
+        for row_number in target_rows:
+            if row_number >= len(rows):
+                continue
+            for word in rows[row_number]:
+                # A value can occur many times on a posting page. The CP-52
+                # amount is the value on the third row after the searched AC.
+                if amount_matches(word["text"], amount_value):
+                    wanted.append((word["x0"] - 1, height - word["bottom"] - 1, word["x1"] - word["x0"] + 2, word["bottom"] - word["top"] + 2))
     overlay_path = output.with_suffix(".overlay.pdf")
     c = canvas.Canvas(str(overlay_path), pagesize=(width, height))
     c.setFillColor(HIGHLIGHT)
@@ -419,4 +490,3 @@ if __name__ == "__main__":
     root = Tk()
     App(root)
     root.mainloop()
-
