@@ -11,6 +11,7 @@ from pitcsuite.tools.payment_extractor import PaymentExtractPanel
 from pitcsuite.tools.multi_merge import MultiMergePanel
 from pitcsuite.tools.pdf_merge import PDFMergePanel
 from pitcsuite.tools.file_checker import SrNoCheckerPanel
+from pitcsuite.tools.file_renamer import FileRenamerPanel
 from pitcsuite.tools.double_cr import DoubleCRPanel
 from pitcsuite.tools.settings import SettingsPanel
 from pitcsuite.tools.integrated_tools import CP22TCheckerPanel, BillScraperPanel, FileMoverPanel, CP52PostingCheckerPanel
@@ -29,6 +30,7 @@ TOOLS = [
     ("🧾  CP22T Posting Checker",          CP22TCheckerPanel),
     ("🧮  Bill Scrapper",                  BillScraperPanel),
     ("📦  File Mover",                     FileMoverPanel),
+    ("🏷️  File Renamer",                    FileRenamerPanel),
     ("📋  CP-52 Posting Checker",           CP52PostingCheckerPanel),
     ("⚙️   Settings",                     SettingsPanel),
 ]
