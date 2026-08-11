@@ -31,7 +31,8 @@ class PITCWorker(QThread):
     log      = Signal(str)
 
     def __init__(self, excel, report_key, download_dir, profile_dir,
-                 restart_after, warmup, print_wait, print_x, print_y):
+                 restart_after, warmup, print_wait, print_x, print_y,
+                 page_from=None, page_to=None):
         super().__init__()
         self.excel         = excel
         self.report_key    = report_key
@@ -42,6 +43,8 @@ class PITCWorker(QThread):
         self.print_wait    = print_wait
         self.print_x       = print_x
         self.print_y       = print_y
+        self.page_from     = page_from
+        self.page_to       = page_to
         self.running       = True
         self.stopped       = False
         self._driver       = None
@@ -87,7 +90,6 @@ class PITCWorker(QThread):
             from selenium.common.exceptions import InvalidSessionIdException, StaleElementReferenceException, TimeoutException
             from webdriver_manager.chrome import ChromeDriverManager
             from openpyxl import load_workbook
-            from reportlab.pdfgen import canvas
             from pypdf import PdfReader, PdfWriter
             import pyautogui, fitz, shutil, traceback
             import datetime as _dt
@@ -230,9 +232,25 @@ class PITCWorker(QThread):
             # prevents an unrelated value on the same row being highlighted.
             return [candidates[0][1]] if candidates[0][0] <= 1 else []
 
-        def filter_pdf(pdf_path, month=None, amount=None):
-            """Keep only the matching page and highlight month/amount."""
+        def filter_pdf(pdf_path, month=None, amount=None, page_from=None, page_to=None):
+            """Filter by an explicit page range or by month/amount."""
             temp_filtered = pdf_path.replace(".pdf", "_filtered.pdf")
+
+            if page_from is not None and page_to is not None:
+                page_doc = fitz.open(pdf_path)
+                total = len(page_doc)
+                if page_from < 1 or page_to < page_from or page_to > total:
+                    page_doc.close()
+                    raise Exception(
+                        f"Page range {page_from}-{page_to} is outside the downloaded PDF (1-{total})"
+                    )
+                page_doc.select(list(range(page_from - 1, page_to)))
+                page_doc.save(temp_filtered, garbage=4, deflate=True, clean=True)
+                page_doc.close()
+                os.replace(temp_filtered, pdf_path)
+                self.log.emit(f"PDF filtered to pages {page_from}-{page_to}")
+                return
+
             reader = PdfReader(pdf_path)
             writer = PdfWriter()
             month_str = format_month(month).lower() if month else None
@@ -273,21 +291,25 @@ class PITCWorker(QThread):
             self.log.emit("PDF filtered and highlighted")
 
         def stamp_sr(pdf_path, sr):
-            reader = PdfReader(pdf_path)
-            writer = PdfWriter()
-            total  = len(reader.pages)
-            for i, page in enumerate(reader.pages, 1):
-                w = float(page.mediabox.width); h = float(page.mediabox.height)
-                overlay = pdf_path.replace(".pdf", "_overlay.pdf")
-                c = canvas.Canvas(overlay, pagesize=(w, h))
-                c.setFont("Helvetica-Bold", 14)
-                c.drawString(w - 260, h - 30, f"Para Sr. No. {sr} ({i}/{total})")
-                c.save()
-                page.merge_page(PdfReader(overlay).pages[0])
-                writer.add_page(page)
-                os.remove(overlay)
-            with open(pdf_path, "wb") as f:
-                writer.write(f)
+            doc = fitz.open(pdf_path)
+            total = len(doc)
+            for i, page in enumerate(doc, 1):
+                # page.rect is rotation-aware, so the stamp stays at the
+                # same visual corner on portrait and landscape pages.
+                rect = page.rect
+                label = f"Sr No. {sr} ({i}/{total})"
+                label_width = fitz.get_text_length(label, fontname="hebo", fontsize=14)
+                page.insert_text(
+                    (rect.width - label_width - 20, 24),
+                    label,
+                    fontsize=14,
+                    fontname="hebo",
+                    color=(0, 0, 0),
+                )
+            stamped = pdf_path.replace(".pdf", "_stamped.pdf")
+            doc.save(stamped, garbage=4, deflate=True, clean=True)
+            doc.close()
+            os.replace(stamped, pdf_path)
 
         def start_driver():
             options = Options()
@@ -429,7 +451,9 @@ class PITCWorker(QThread):
                 final_path = os.path.join(dl, final_name)
                 os.rename(new_pdf, final_path)
 
-                if month or amount:
+                if self.page_from is not None and self.page_to is not None:
+                    filter_pdf(final_path, page_from=self.page_from, page_to=self.page_to)
+                elif month or amount:
                     filter_pdf(final_path, month, amount)
 
                 if sr:
@@ -509,6 +533,23 @@ class PITCPanel(QWidget):
         g_rep_h.addWidget(self.report_cb); g_rep_h.addStretch()
         layout.addWidget(g_rep)
 
+        # -- Optional page range --
+        g_pages = QGroupBox("Optional Page Range")
+        g_pages_h = QHBoxLayout(g_pages)
+        g_pages_h.addWidget(QLabel("Pages from:"))
+        self.page_from_ed = QLineEdit()
+        self.page_from_ed.setPlaceholderText("e.g. 2")
+        self.page_from_ed.setProperty("preferred_width", 90)
+        g_pages_h.addWidget(self.page_from_ed)
+        g_pages_h.addWidget(QLabel("Pages to:"))
+        self.page_to_ed = QLineEdit()
+        self.page_to_ed.setPlaceholderText("e.g. 4")
+        self.page_to_ed.setProperty("preferred_width", 90)
+        g_pages_h.addWidget(self.page_to_ed)
+        g_pages_h.addWidget(QLabel("(inclusive; skips month/amount filtering and highlighting)"))
+        g_pages_h.addStretch()
+        layout.addWidget(g_pages)
+
         # ── Paths ──
         g2 = QGroupBox("Paths")
         g2v = QVBoxLayout(g2)
@@ -561,6 +602,24 @@ class PITCPanel(QWidget):
         )
 
     def run(self):
+        page_from_text = self.page_from_ed.text().strip()
+        page_to_text = self.page_to_ed.text().strip()
+        if bool(page_from_text) != bool(page_to_text):
+            QMessageBox.warning(self, "Invalid Page Range", "Enter both Pages from and Pages to, or leave both blank.")
+            return
+
+        page_from = page_to = None
+        if page_from_text:
+            try:
+                page_from = int(page_from_text)
+                page_to = int(page_to_text)
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Page Range", "Page numbers must be whole numbers.")
+                return
+            if page_from < 1 or page_to < page_from:
+                QMessageBox.warning(self, "Invalid Page Range", "Pages to must be greater than or equal to Pages from.")
+                return
+
         self.btn_start.setEnabled(False); self.btn_stop.setEnabled(True)
         self.log_box.clear()
         self.worker = PITCWorker(
@@ -573,6 +632,8 @@ class PITCPanel(QWidget):
             print_wait    = self.sp_pwait.value(),
             print_x       = self.sp_px.value(),
             print_y       = self.sp_py.value(),
+            page_from     = page_from,
+            page_to       = page_to,
         )
         self.worker.log.connect(self.log_box.append)
         self.worker.progress.connect(self.progress.setValue)
