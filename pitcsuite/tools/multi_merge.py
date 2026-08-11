@@ -99,13 +99,21 @@ class MultiMergePanel(QWidget):
         writer = PdfWriter(); step = 0; total = sum(len(x) for x in folder_data)
         while any(folder_data):
             if self.stop_flag["stop"]: self.signals.update.emit("Stopped.", step, total, True); return
-            current = folder_data[0][0][0] if folder_data[0] else None
+            # Choose the lowest remaining Para number across all folders.
+            # Folder 1 may finish before the others; using it as the sole
+            # source of `current` would otherwise leave this loop spinning.
+            current_key, current = min(
+                (
+                    (self.natural_key(files[0][0]), files[0][0])
+                    for files in folder_data if files
+                ),
+                key=lambda item: item[0],
+            )
             for idx2, files in enumerate(folder_data, start=1):
                 if not files: continue
                 para, fname = files[0]
-                if current and para == current: files.pop(0)
-                elif current and self.natural_key(para) < self.natural_key(current): files.pop(0)
-                else: continue
+                if self.natural_key(para) != current_key: continue
+                files.pop(0)
                 step += 1; self.signals.update.emit(f"Folder {idx2} → Para {para}", step, total, False)
                 try:
                     reader = PdfReader(os.path.join(folders[idx2-1], fname))
