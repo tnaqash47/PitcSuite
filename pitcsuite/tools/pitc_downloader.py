@@ -485,6 +485,26 @@ class PITCWorker(QThread):
                 candidates.add(compact_ac[:-1])
             return any(candidate in compact_page for candidate in candidates)
 
+        def wait_for_report_or_missing(drv, href_kw, timeout=8):
+            """Wait briefly for either a report link or a missing-AC result."""
+            report_xpath = f"//a[contains(@href,'{href_kw}')]"
+
+            def ready(current_driver):
+                missing = missing_ac_status(current_driver)
+                if missing:
+                    return missing
+                if current_driver.find_elements(By.XPATH, report_xpath):
+                    return "report"
+                return False
+
+            try:
+                result = WebDriverWait(drv, timeout, poll_frequency=0.25).until(ready)
+                return None if result == "report" else result
+            except TimeoutException:
+                # No report link after the short search window means this AC
+                # is unavailable; avoid the old 5 x 40-second retry path.
+                return "data not exist/Wrong AC No."
+
         driver, wait = start_driver()
         driver, wait = login_with_session_recovery(driver, wait)
 
@@ -521,7 +541,7 @@ class PITCWorker(QThread):
                 wait.until(EC.element_to_be_clickable((By.NAME, "ctl00$ContentPlaceHolder1$btnGo"))).click()
                 time.sleep(2)
 
-                missing_status = missing_ac_status(driver)
+                missing_status = wait_for_report_or_missing(driver, href_kw)
                 if missing_status:
                     status.value = missing_status
                     self.log.emit(f"→ {missing_status}; print skipped")
@@ -547,7 +567,16 @@ class PITCWorker(QThread):
                     wb.save(self.excel)
                     try:
                         if report_opened:
-                            pyautogui.hotkey("ctrl", "w")
+                            # The report opens in the current Chrome tab. Do
+                            # not use Ctrl+W here: it can close the only
+                            # browser window and invalidate the Selenium
+                            # session for every remaining Excel row.
+                            driver.back()
+                            WebDriverWait(driver, 10).until(
+                                EC.presence_of_element_located(
+                                    (By.NAME, "ctl00$ContentPlaceHolder1$txtReferenceNumber")
+                                )
+                            )
                     except Exception:
                         pass
                     time.sleep(1)
