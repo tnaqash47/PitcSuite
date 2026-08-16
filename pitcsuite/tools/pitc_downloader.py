@@ -466,6 +466,25 @@ class PITCWorker(QThread):
                 return "data not exist/Wrong AC No."
             return None
 
+        def ac_found_on_page(drv, ac_no):
+            """Check that the requested AC number is present in the report."""
+            try:
+                page = drv.find_element(By.TAG_NAME, "body").text
+            except Exception:
+                return False
+
+            compact_page = re.sub(r"[^a-z0-9]", "", page.lower())
+            compact_ac = re.sub(r"[^a-z0-9]", "", str(ac_no).lower())
+            if not compact_ac:
+                return False
+
+            candidates = {compact_ac}
+            # Excel may expose a numeric AC as 123456.0.  The portal normally
+            # renders the underlying integer without the trailing .0.
+            if compact_ac.endswith("0") and str(ac_no).strip().endswith(".0"):
+                candidates.add(compact_ac[:-1])
+            return any(candidate in compact_page for candidate in candidates)
+
         driver, wait = start_driver()
         driver, wait = login_with_session_recovery(driver, wait)
 
@@ -509,11 +528,18 @@ class PITCWorker(QThread):
                 else:
                     open_report_link(driver, wait, href_kw)
                     report_opened = True
-                    time.sleep(1)
+                    try:
+                        WebDriverWait(driver, 15).until(
+                            lambda drv: missing_ac_status(drv) or ac_found_on_page(drv, ac)
+                        )
+                    except TimeoutException:
+                        pass
+
                     missing_status = missing_ac_status(driver)
-                    if missing_status:
+                    if missing_status or not ac_found_on_page(driver, ac):
+                        missing_status = missing_status or "data not exist/Wrong AC No."
                         status.value = missing_status
-                        self.log.emit(f"→ {missing_status}; print skipped")
+                        self.log.emit(f"→ {missing_status}; AC not found on report page; print skipped")
                     else:
                         wait.until(EC.element_to_be_clickable((By.ID, "ctl00_ContentPlaceHolder1_btnPrint"))).click()
 
