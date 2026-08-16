@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget, QFrame, QLineEdit, QSizePolicy, QBoxLayout
+from PySide6.QtWidgets import QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedWidget, QFrame, QLineEdit, QSpinBox, QSizePolicy, QScrollArea, QBoxLayout
 from PySide6.QtCore import Qt
 
 from pitcsuite.icons import app_icon
@@ -41,8 +41,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("PITC Suite  ·  Developed by Tahir Naqash")
         self.setWindowIcon(app_icon())
-        self.resize(780, 640)
-        self.nav_collapsed = False
+        self.resize(720, 680)
+        self.setMinimumSize(600, 480)
+        self.nav_collapsed = True
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -80,7 +81,10 @@ class MainWindow(QMainWindow):
         self.nav_icons = []
         self.stack = QStackedWidget()
         self.stack.setMinimumSize(0, 0)
-        self.stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        # Keep the tool form readable on wide/maximized windows instead of
+        # allowing every group box and row to stretch across the screen.
+        self.stack.setMaximumWidth(720)
+        self.stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
         for i, (name, panel_class) in enumerate(TOOLS):
             btn = QPushButton(name)
@@ -93,7 +97,7 @@ class MainWindow(QMainWindow):
             self.nav_icons.append(self._nav_icon(name))
             panel = panel_class()
             panel.setMinimumSize(0, 0)
-            panel.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+            panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             self.stack.addWidget(panel)
 
         nav_layout.addStretch()
@@ -101,6 +105,7 @@ class MainWindow(QMainWindow):
         self.ver_lbl.setAlignment(Qt.AlignCenter)
         self.ver_lbl.setStyleSheet("color:#3a4a6a; font-size:10px; padding:8px;")
         nav_layout.addWidget(self.ver_lbl)
+        self._apply_nav_state()
 
         outer.addWidget(self.nav)
 
@@ -108,7 +113,16 @@ class MainWindow(QMainWindow):
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(16, 12, 16, 12)
         content_layout.setSpacing(6)
-        content_layout.addWidget(self.stack)
+        self.content_scroll = QScrollArea()
+        self.content_scroll.setWidgetResizable(True)
+        self.content_scroll.setFrameShape(QFrame.NoFrame)
+        # Keep wheel/trackpad scrolling, but hide the scrollbar controls from
+        # the compact layout so they do not consume space or add visual noise.
+        self.content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.content_scroll.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self.content_scroll.setWidget(self.stack)
+        content_layout.addWidget(self.content_scroll)
         outer.addWidget(content, 1)
 
         self._make_inputs_responsive()
@@ -138,6 +152,8 @@ class MainWindow(QMainWindow):
 
     def _make_inputs_responsive(self):
         for edit in self.stack.findChildren(QLineEdit):
+            if isinstance(edit.parentWidget(), QSpinBox):
+                continue
             edit.setMinimumWidth(70)
             edit.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             edit.setCursorPosition(0)
@@ -157,7 +173,7 @@ class MainWindow(QMainWindow):
                 btn.setMaximumWidth(82)
             elif any(word in text for word in ("start", "stop", "pause", "resume", "save")):
                 btn.setMaximumWidth(92)
-            btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+            btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         for i in range(self.stack.count()):
             self._compact_line_edit_rows(self.stack.widget(i).layout())
@@ -166,7 +182,9 @@ class MainWindow(QMainWindow):
         if layout is None:
             return
         has_line_edit = any(
-            layout.itemAt(i).widget() is not None and isinstance(layout.itemAt(i).widget(), QLineEdit)
+            layout.itemAt(i).widget() is not None
+            and isinstance(layout.itemAt(i).widget(), QLineEdit)
+            and not isinstance(layout.itemAt(i).widget().parentWidget(), QSpinBox)
             for i in range(layout.count())
         )
         for i in range(layout.count()):
@@ -174,6 +192,8 @@ class MainWindow(QMainWindow):
             widget = item.widget()
             child = item.layout()
             if isinstance(layout, QBoxLayout) and has_line_edit:
+                # Inputs use compact fixed widths; keep them immediately
+                # beside their labels and leave spare space at row end.
                 layout.setStretch(i, 0)
                 layout.setAlignment(Qt.AlignLeft)
             if widget is not None and widget.layout() is not None:
@@ -186,22 +206,26 @@ class MainWindow(QMainWindow):
     def _update_responsive_sizes(self):
         nav_width = 44 if self.nav_collapsed else 245
         content_width = max(self.width() - nav_width - 48, 240)
-        edit_max = max(120, min(260, int(content_width * 0.35)))
-        font_size = 11
-        for edit in self.stack.findChildren(QLineEdit):
-            preferred = edit.property("preferred_width")
-            target_width = min(int(preferred), max(120, int(content_width * 0.74))) if preferred else edit_max
-            edit.setFixedWidth(target_width)
-            font = edit.font()
+        font_size = 10 if self.isMaximized() else 8
+        for widget in self.stack.findChildren(QWidget):
+            font = widget.font()
             font.setPointSize(font_size)
-            edit.setFont(font)
+            widget.setFont(font)
+
+        for edit in self.stack.findChildren(QLineEdit):
+            if isinstance(edit.parentWidget(), QSpinBox):
+                continue
+            preferred = edit.property("preferred_width")
+            # Keep fields close to their labels instead of letting them fill
+            # the entire row on wide/maximized windows.  They still shrink
+            # proportionally when the available content area is narrow.
+            base_width = min(int(preferred) if preferred else 220, 220)
+            target_width = min(base_width, max(70, int(content_width * 0.34)))
+            edit.setFixedWidth(target_width)
         for btn in self.stack.findChildren(QPushButton):
             preferred = btn.property("preferred_width")
             if preferred:
                 btn.setMaximumWidth(min(int(preferred), max(80, int(content_width * 0.5))))
-            font = btn.font()
-            font.setPointSize(font_size)
-            btn.setFont(font)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

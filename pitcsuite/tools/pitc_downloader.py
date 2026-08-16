@@ -32,7 +32,7 @@ class PITCWorker(QThread):
 
     def __init__(self, excel, report_key, download_dir, profile_dir,
                  restart_after, warmup, print_wait, print_x, print_y,
-                 page_from=None, page_to=None):
+                 page_from=None, page_to=None, match_mode="first"):
         super().__init__()
         self.excel         = excel
         self.report_key    = report_key
@@ -45,6 +45,7 @@ class PITCWorker(QThread):
         self.print_y       = print_y
         self.page_from     = page_from
         self.page_to       = page_to
+        self.match_mode    = match_mode
         self.running       = True
         self.stopped       = False
         self._driver       = None
@@ -166,33 +167,44 @@ class PITCWorker(QThread):
             return s
 
         def amount_as_integer(value):
-            """Convert an amount to its whole-number value for row matching."""
+            """Convert an amount to whole rupees, ignoring decimal places."""
             try:
                 from decimal import Decimal, InvalidOperation
-                raw = str(value).strip()
-                match = re.search(r"-?\d[\d,]*(?:\.\d+)?", raw)
+                raw = str(value).replace("\u00a0", " ").strip()
+                # PDF text may contain spaces inside a formatted number, e.g.
+                # ``85, 567.00``. Remove only spaces between digits.
+                raw = re.sub(r"(?<=\d)\s+(?=[\d,])", "", raw)
+                match = re.search(r"[-+]?\d[\d,]*(?:\.\d+)?", raw)
                 if not match:
                     return None
                 return int(Decimal(match.group(0).replace(",", "")))
             except (InvalidOperation, ValueError, TypeError):
                 return None
 
-        def exact_amount_rects(page, amount):
+        def amount_matches(value, amount, tolerance=1):
+            """Return True when two whole-rupee amounts are equal or differ by 1."""
+            value = amount_as_integer(value)
+            target = amount_as_integer(amount)
+            return value is not None and target is not None and abs(value - target) <= tolerance
+
+        def amount_rects(page, amount):
             target = amount_as_integer(amount)
             if target is None:
                 return []
             rects = []
             for word in page.get_text("words"):
-                if amount_as_integer(word[4]) == target:
+                if amount_matches(word[4], target):
                     rects.append(fitz.Rect(word[:4]))
             return rects
 
-        def text_has_exact_amount(text, amount):
+        def text_has_amount(text, amount):
             target = amount_as_integer(amount)
             if target is None:
                 return False
+            # Some PDF extractors put a space after a thousands separator.
+            text = re.sub(r"(?<=,)[ \t]+(?=\d)", "", text)
             number_tokens = re.findall(r"(?<![\d.-])[\d,]+(?:\.\d+)?(?![\d.-])", text)
-            return any(amount_as_integer(token) == target for token in number_tokens)
+            return any(amount_matches(token, target) for token in number_tokens)
 
         def debit_amount_in_month_row(page, month, amount):
             """Find the closest debit amount on the row containing the month.
@@ -252,34 +264,58 @@ class PITCWorker(QThread):
                 return
 
             reader = PdfReader(pdf_path)
+            fitz_doc = fitz.open(pdf_path)
             writer = PdfWriter()
             month_str = format_month(month).lower() if month else None
-            found = False
-            for page in reader.pages:
-                text  = (page.extract_text() or "").lower()
-                m = month_str and month_str in text
-                a = amount and text_has_exact_amount(text, amount)
-                if m or a:
-                    writer.add_page(page)
-                    found = True
-                    break
-            if not found:
+            has_month = bool(month_str)
+            has_amount = amount_as_integer(amount) is not None
+            matching_pages = []
+            for page_number, page in enumerate(reader.pages):
+                # Use the same extractor as highlighting. Browser-generated
+                # PDFs can return incomplete text through pypdf, especially
+                # for amounts containing commas and decimal places.
+                text = fitz_doc[page_number].get_text("text").lower()
+                m = has_month and month_str in text
+                a = has_amount and text_has_amount(text, amount)
+                # With both filters supplied, require both on the same page.
+                # With only an amount supplied, amount matching is sufficient.
+                matches = (m and a) if (has_month and has_amount) else (m or a)
+                if matches:
+                    matching_pages.append(page_number)
+            fitz_doc.close()
+            if self.match_mode == "second":
+                selected_pages = matching_pages[1:2]
+            elif self.match_mode == "all":
+                selected_pages = matching_pages
+            else:
+                selected_pages = matching_pages[:1]
+
+            if not selected_pages:
                 os.remove(pdf_path)
+                if self.match_mode == "second" and matching_pages:
+                    raise Exception("Only one matching page found; second match does not exist")
                 raise Exception("No matching page found (month/amount)")
+
+            for page_number in selected_pages:
+                writer.add_page(reader.pages[page_number])
             with open(temp_filtered, "wb") as f:
                 writer.write(f)
+            self.log.emit(
+                f"Selected {self.match_mode} matching page(s): "
+                f"{len(selected_pages)} of {len(matching_pages)} found"
+            )
             # highlight
             doc = fitz.open(temp_filtered)
             for page in doc:
-                if month:
+                if has_month:
                     month_rects = page.search_for(format_month(month))
                     for rect in month_rects:
                         page.add_highlight_annot(rect).update()
-                if amount:
-                    if month:
+                if has_amount:
+                    if has_month:
                         areas = debit_amount_in_month_row(page, month, amount)
                     else:
-                        areas = exact_amount_rects(page, amount)
+                        areas = amount_rects(page, amount)
                     for rect in areas:
                         page.add_highlight_annot(rect).update()
             highlighted = pdf_path.replace(".pdf", "_highlighted.pdf")
@@ -399,6 +435,37 @@ class PITCWorker(QThread):
                     time.sleep(1)
             raise Exception(f"Could not open report link: {href_kw}")
 
+        def missing_ac_status(drv):
+            """Return the workbook status when the portal reports no AC data.
+
+            The portal has used several different messages for the same
+            condition over time.  Check the visible page text before opening
+            a report and again after opening it so a stale/empty report page
+            cannot reach the Print button.
+            """
+            try:
+                text = drv.find_element(By.TAG_NAME, "body").text
+            except Exception:
+                return None
+
+            normalized = re.sub(r"\s+", " ", text).strip().lower()
+            missing_phrases = (
+                "data not exist",
+                "data does not exist",
+                "data doesn't exist",
+                "no data found",
+                "record not found",
+                "bill not found",
+                "does not belongs",
+                "does not belong",
+                "wrong ac no",
+                "wrong account",
+                "invalid account",
+            )
+            if any(phrase in normalized for phrase in missing_phrases):
+                return "data not exist/Wrong AC No."
+            return None
+
         driver, wait = start_driver()
         driver, wait = login_with_session_recovery(driver, wait)
 
@@ -426,6 +493,7 @@ class PITCWorker(QThread):
 
             try:
                 ensure_logged_in(driver, wait)
+                report_opened = False
 
                 box = wait.until(EC.element_to_be_clickable((By.NAME, "ctl00$ContentPlaceHolder1$txtReferenceNumber")))
                 box.send_keys(Keys.CONTROL, "a", Keys.BACKSPACE)
@@ -434,36 +502,56 @@ class PITCWorker(QThread):
                 wait.until(EC.element_to_be_clickable((By.NAME, "ctl00$ContentPlaceHolder1$btnGo"))).click()
                 time.sleep(2)
 
-                open_report_link(driver, wait, href_kw)
+                missing_status = missing_ac_status(driver)
+                if missing_status:
+                    status.value = missing_status
+                    self.log.emit(f"→ {missing_status}; print skipped")
+                else:
+                    open_report_link(driver, wait, href_kw)
+                    report_opened = True
+                    time.sleep(1)
+                    missing_status = missing_ac_status(driver)
+                    if missing_status:
+                        status.value = missing_status
+                        self.log.emit(f"→ {missing_status}; print skipped")
+                    else:
+                        wait.until(EC.element_to_be_clickable((By.ID, "ctl00_ContentPlaceHolder1_btnPrint"))).click()
 
-                wait.until(EC.element_to_be_clickable((By.ID, "ctl00_ContentPlaceHolder1_btnPrint"))).click()
+                if missing_status:
+                    wb.save(self.excel)
+                    try:
+                        if report_opened:
+                            pyautogui.hotkey("ctrl", "w")
+                    except Exception:
+                        pass
+                    time.sleep(1)
+                else:
+                    existing = {f for f in os.listdir(dl) if f.lower().endswith(".pdf")}
+                    time.sleep(self.print_wait)
 
-                existing = {f for f in os.listdir(dl) if f.lower().endswith(".pdf")}
-                time.sleep(self.print_wait)
+                    pyautogui.click(self.print_x, self.print_y)
+                    pyautogui.press(["down"])
+                    pyautogui.press(["tab", "tab", "tab", "enter"])
 
-                pyautogui.click(self.print_x, self.print_y)
-                pyautogui.press(["down"])
-                pyautogui.press(["tab", "tab", "tab", "enter"])
+                    new_pdf    = wait_for_new_pdf(existing)
+                    base_name  = sr if sr else ac
+                    final_name = get_unique_name(base_name)
+                    final_path = os.path.join(dl, final_name)
+                    os.rename(new_pdf, final_path)
 
-                new_pdf    = wait_for_new_pdf(existing)
-                base_name  = sr if sr else ac
-                final_name = get_unique_name(base_name)
-                final_path = os.path.join(dl, final_name)
-                os.rename(new_pdf, final_path)
+                    if self.page_from is not None and self.page_to is not None:
+                        filter_pdf(final_path, page_from=self.page_from, page_to=self.page_to)
+                    elif month or amount_as_integer(amount) is not None:
+                        filter_pdf(final_path, month, amount)
 
-                if self.page_from is not None and self.page_to is not None:
-                    filter_pdf(final_path, page_from=self.page_from, page_to=self.page_to)
-                elif month or amount:
-                    filter_pdf(final_path, month, amount)
+                    if sr:
+                        stamp_sr(final_path, sr)
 
-                if sr:
-                    stamp_sr(final_path, sr)
+                    status.value = "Done"
+                    self.log.emit(f"✅ PDF created: {final_name}")
 
-                status.value = "Done"
-                self.log.emit(f"✅ PDF created: {final_name}")
-
-                pyautogui.hotkey("ctrl", "w")
-                time.sleep(2)
+                    pyautogui.hotkey("ctrl", "w")
+                    time.sleep(2)
 
             except Exception as e:
                 traceback.print_exc()
@@ -513,7 +601,9 @@ class PITCPanel(QWidget):
         g1 = QGroupBox("Excel File  (Columns: A = AC No  ·  B = Sr No  ·  C = Month  ·  D = Amount  ·  E = Status)")
         g1v = QVBoxLayout(g1)
         g1.setTitle("Excel File")
-        g1v.addWidget(QLabel("Columns: A = AC No  -  B = Sr No\nC = Month  -  D = Amount  -  E = Status"))
+        columns_hint = QLabel("Columns: A = AC No  -  B = Sr No\nC = Month  -  D = Amount  -  E = Status")
+        columns_hint.setWordWrap(True)
+        g1v.addWidget(columns_hint)
         r_ex = QHBoxLayout()
         self.excel_ed = QLineEdit("D:\\PITC.xlsx"); self.excel_ed.setReadOnly(True); self.excel_ed.setProperty("preferred_width", 245)
         b1 = QPushButton("Browse"); b1.clicked.connect(self.pick_excel)
@@ -531,35 +621,58 @@ class PITCPanel(QWidget):
         self.report_cb.addItems(self.REPORT_LABELS)
         self.report_cb.setCurrentIndex(4)
         g_rep_h.addWidget(self.report_cb); g_rep_h.addStretch()
-        layout.addWidget(g_rep)
 
         # -- Optional page range --
         g_pages = QGroupBox("Optional Page Range")
-        g_pages_h = QHBoxLayout(g_pages)
-        g_pages_h.addWidget(QLabel("Pages from:"))
+        g_pages_h = QGridLayout(g_pages)
+        g_pages_h.setHorizontalSpacing(8)
+        g_pages_h.setVerticalSpacing(6)
+        g_pages_h.addWidget(QLabel("From:"), 0, 0)
         self.page_from_ed = QLineEdit()
         self.page_from_ed.setPlaceholderText("e.g. 2")
         self.page_from_ed.setProperty("preferred_width", 90)
-        g_pages_h.addWidget(self.page_from_ed)
-        g_pages_h.addWidget(QLabel("Pages to:"))
+        g_pages_h.addWidget(self.page_from_ed, 0, 1)
+        g_pages_h.addWidget(QLabel("To:"), 0, 2)
         self.page_to_ed = QLineEdit()
         self.page_to_ed.setPlaceholderText("e.g. 4")
         self.page_to_ed.setProperty("preferred_width", 90)
-        g_pages_h.addWidget(self.page_to_ed)
-        g_pages_h.addWidget(QLabel("(inclusive; skips month/amount filtering and highlighting)"))
-        g_pages_h.addStretch()
-        layout.addWidget(g_pages)
+        g_pages_h.addWidget(self.page_to_ed, 0, 3)
+        g_pages_h.setColumnStretch(1, 1)
+        g_pages_h.setColumnStretch(3, 1)
+        # -- Match selection --
+        g_match = QGroupBox("Matching Pages")
+        g_match_h = QHBoxLayout(g_match)
+        g_match_h.addWidget(QLabel("Download:"))
+        self.match_cb = QComboBox()
+        self.match_cb.addItem("First matching page", "first")
+        self.match_cb.addItem("Second matching page", "second")
+        self.match_cb.addItem("All matching pages", "all")
+        self.match_cb.setToolTip("Controls which pages are kept when month/amount matches multiple pages.")
+        g_match_h.addWidget(self.match_cb)
+        g_match_h.addStretch()
+        report_match_row = QHBoxLayout()
+        report_match_row.setSpacing(8)
+        report_match_row.addWidget(g_rep, 1)
+        report_match_row.addWidget(g_match, 1)
+        layout.addLayout(report_match_row)
+
+        # Keep the page-range controls in a dedicated left box and reserve a
+        # matching blank box on the right for future options.
+        future_options = QGroupBox()
+        options_row = QHBoxLayout()
+        options_row.setSpacing(8)
+        options_row.addWidget(g_pages, 1)
+        options_row.addWidget(future_options, 1)
+        layout.addLayout(options_row)
 
         # ── Paths ──
         g2 = QGroupBox("Paths")
-        g2v = QVBoxLayout(g2)
-        r_dl = QHBoxLayout(); lbl_dl = QLabel("Download Dir:"); lbl_dl.setFixedWidth(105); r_dl.addWidget(lbl_dl)
-        self.dl_ed = QLineEdit(r"D:\PITC_PDFs"); r_dl.addWidget(self.dl_ed, 1)
-        g2v.addLayout(r_dl)
-        r_pr = QHBoxLayout(); lbl_pr = QLabel("Chrome Profile:"); lbl_pr.setFixedWidth(105); r_pr.addWidget(lbl_pr)
-        self.pr_ed = QLineEdit(r"C:\ChromeProfiles\PITC"); self.pr_ed.setProperty("preferred_width", 245); r_pr.addWidget(self.pr_ed, 1)
-        g2v.addLayout(r_pr)
-        layout.addWidget(g2)
+        g2v = QHBoxLayout(g2)
+        lbl_dl = QLabel("Download Dir:"); lbl_dl.setFixedWidth(82); g2v.addWidget(lbl_dl)
+        self.dl_ed = QLineEdit(r"D:\PITC_PDFs"); self.dl_ed.setProperty("preferred_width", 245); g2v.addWidget(self.dl_ed, 1)
+        lbl_pr = QLabel("Chrome Profile:"); lbl_pr.setFixedWidth(92); g2v.addWidget(lbl_pr)
+        self.pr_ed = QLineEdit(r"C:\ChromeProfiles\PITC"); self.pr_ed.setProperty("preferred_width", 245); g2v.addWidget(self.pr_ed, 1)
+        layout.insertWidget(4, g2)
 
         # ── Timing & Print ──
         g3 = QGroupBox("Timing & Print Dialog")
@@ -634,6 +747,7 @@ class PITCPanel(QWidget):
             print_y       = self.sp_py.value(),
             page_from     = page_from,
             page_to       = page_to,
+            match_mode    = self.match_cb.currentData(),
         )
         self.worker.log.connect(self.log_box.append)
         self.worker.progress.connect(self.progress.setValue)
