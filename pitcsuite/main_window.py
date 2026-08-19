@@ -6,8 +6,7 @@ from pitcsuite.ui_helpers import NAV_STYLE
 from pitcsuite.tools.pitc_downloader import PITCPanel
 from pitcsuite.tools.extract_page import ExtractPagePanel
 from pitcsuite.tools.bill_downloader import BillSoftPanel
-from pitcsuite.tools.sdiv_extractor import ExtractSdPanel
-from pitcsuite.tools.payment_extractor import PaymentExtractPanel
+from pitcsuite.tools.payment_extract_88l import PaymentExtract88LPanel
 from pitcsuite.tools.multi_merge import MultiMergePanel
 from pitcsuite.tools.pdf_merge import PDFMergePanel
 from pitcsuite.tools.file_checker import SrNoCheckerPanel
@@ -21,8 +20,7 @@ TOOLS = [
     ("📥  PITC Downloader",               PITCPanel),
     ("🔍  Extract PITC Pages",            ExtractPagePanel),
     ("🧾  E/Bills Downloader",            BillSoftPanel),
-    ("✂️   Sdiv Extract (88L)",           ExtractSdPanel),
-    ("💰  Payment Extract (88L)",         PaymentExtractPanel),
+    ("💰  Payment Extract (88L)",         PaymentExtract88LPanel),
     ("📚  Multi-Merge",                   MultiMergePanel),
     ("🔗  PDF Merge",                     PDFMergePanel),
     ("📂  File Checker",                  SrNoCheckerPanel),
