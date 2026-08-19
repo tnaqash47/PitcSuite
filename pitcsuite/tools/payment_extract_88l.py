@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QProgressBar, QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from pitcsuite.ui_helpers import hline, lbl, START_BTN, STOP_BTN
+from pitcsuite.ui_helpers import hline, lbl, START_BTN, STOP_BTN, notify
 from pitcsuite.templates import download_template
 
 
@@ -231,3 +231,4 @@ class PaymentExtract88LPanel(QWidget):
 
     def on_finished(self):
         self.start_btn.setEnabled(True); self.stop_btn.setEnabled(False)
+        notify(self, "Completed", "88L payment extraction completed.")
