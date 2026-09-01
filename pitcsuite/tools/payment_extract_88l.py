@@ -57,6 +57,12 @@ def ledger_year(text, fallback=""):
 
 def split_pages(text, header):
     lines = text.splitlines()
+    batch_starts = [i for i, line in enumerate(lines) if re.search(r"^\s*BATCH\s*:", line, re.I)]
+    if batch_starts:
+        # Each ledger page starts with its own BATCH header.  Splitting only
+        # at S/DIV caused the next page's BATCH header to be appended to the
+        # bottom of the previous exported PDF page.
+        return ["\n".join(lines[start:end]) for start, end in zip(batch_starts, batch_starts[1:] + [len(lines)])]
     starts = [i for i, line in enumerate(lines) if re.search(r"(?:S/DIV\s*:|S/Div\s*:|Sub\s+Division\b)", line, re.I)]
     return ["\n".join(([header] if header else []) + lines[start:end]) for start, end in zip(starts, starts[1:] + [len(lines)])]
 
@@ -120,6 +126,18 @@ def extract_payment(page_text, ref_no, sub_div=""):
 
 def safe_text(value):
     return "" if value is None else str(value).strip()
+
+
+def export_lines(text):
+    """Prepare ledger text for PDF output without the source-file page marker."""
+    lines = text.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    # The text export appends a standalone page number after the ledger data.
+    # It is not part of the 88L ledger and should not be printed in the PDF.
+    if lines and re.fullmatch(r"\s*\d{1,4}\s*", lines[-1]):
+        lines.pop()
+    return lines
 
 
 class PaymentExtract88LWorker(QThread):
@@ -211,7 +229,7 @@ class PaymentExtract88LWorker(QThread):
                         if sub_div and not re.search(rf"(?<!\d){re.escape(sub_div)}(?!\d)", page): continue
                         amount, date_dd_mm = extract_payment(page, ref_no, sub_div)
                         if not amount: continue
-                        year, total_amount = ledger_year(text, record["year"]), total_amount + float(amount.replace(",", ""))
+                        year, total_amount = ledger_year(page, record["year"]), total_amount + float(amount.replace(",", ""))
                         self.log.emit(f"✅ Payment {page_number} | Amount: {amount} | Date: {date_dd_mm}/{year}")
                         pay_index = 1
                         while f"Payment_{pay_index}" in payment_cols and sheet.cell(row_number, payment_cols[f"Payment_{pay_index}"]).value: pay_index += 1
@@ -247,9 +265,9 @@ class PaymentExtract88LWorker(QThread):
 
     @staticmethod
     def create_pdf(text, output_path, label, ref_no, amount, date_dd_mm, canvas, page_size, colors):
-        c = canvas.Canvas(str(output_path), pagesize=page_size); width, height = page_size; lines = text.splitlines()
+        c = canvas.Canvas(str(output_path), pagesize=page_size); width, height = page_size; lines = export_lines(text)
         if not lines: c.save(); return
-        left, top, bottom = 18, 30, 22; usable_width = width - 36; reference_size = 9
+        left, top, bottom = 18, 30, 22; usable_width = width - 36; reference_size = 16
         longest = max(c.stringWidth(line, "Courier", reference_size) for line in lines)
         width_size = reference_size * usable_width / max(longest, 1)
         # Fit the complete source page vertically.  The old fixed line gap
@@ -260,15 +278,17 @@ class PaymentExtract88LWorker(QThread):
         gap = min(reference_size + 1, height_gap)
         font_size = max(5, min(reference_size, width_size, gap - 1))
         gap = max(font_size + 1, height_gap)
+        max_text_width = max(c.stringWidth(line, "Courier", font_size) for line in lines)
+        horizontal_scale = min(140, 100 * usable_width / max(max_text_width, 1))
         c.setFont("Courier", font_size)
         y = height - top - gap
         if label:
-            first_width = c.stringWidth(lines[0], "Courier", font_size); c.setFont("Helvetica-Bold", 10); label_width = c.stringWidth(label, "Helvetica-Bold", 10); label_x = left + first_width - label_width; label_y = height - top + gap
+            c.setFont("Helvetica-Bold", 10); label_width = c.stringWidth(label, "Helvetica-Bold", 10); label_x = width - left - label_width; label_y = height - top + gap
             c.drawString(label_x, label_y, label); c.line(label_x, label_y - 1.5, label_x + label_width, label_y - 1.5); c.setFont("Courier", font_size)
         for line in lines:
             if ref_no in line and amount in line and date_dd_mm in line:
-                c.saveState(); c.setFillAlpha(0.25); c.setFillColor(colors.yellow); c.rect(left - 2, y - 2, c.stringWidth(line, "Courier", font_size) + 4, gap + 2, 0, 1); c.restoreState()
-            c.drawString(left, y, line); y -= gap
+                c.saveState(); c.setFillAlpha(0.25); c.setFillColor(colors.yellow); c.rect(left - 2, y - 2, c.stringWidth(line, "Courier", font_size) * horizontal_scale / 100 + 4, gap + 2, 0, 1); c.restoreState()
+            text_line = c.beginText(left, y); text_line.setFont("Courier", font_size); text_line.setHorizScale(horizontal_scale); text_line.textOut(line); c.drawText(text_line); y -= gap
         c.save()
 
 
