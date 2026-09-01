@@ -178,10 +178,20 @@ class PaymentExtract88LWorker(QThread):
                 batch = safe_text(sheet.cell(row_number, headers["BN"]).value).zfill(2)
                 sub_div, ref_no = safe_text(sheet.cell(row_number, headers["Sdiv"]).value), safe_text(sheet.cell(row_number, headers["AC No."]).value)
                 para_sr = safe_text(sheet.cell(row_number, headers["Para Sr. No."]).value)
-                if not para_sr or para_sr.lower() == "nan": continue
+                if para_sr.lower() == "nan":
+                    para_sr = ""
+                resolved_ref = consumer_reference(ref_no, sub_div)
+                # Para Sr. No. is optional.  When it is blank, retain the row
+                # and use the complete ledger reference as the output key:
+                # BN + SDiv + the resolved 7-digit ledger AC.
+                sub_div_digits = re.sub(r"\D", "", sub_div).zfill(5)
+                output_id = para_sr or f"{batch}{sub_div_digits}{resolved_ref}"
+                if not output_id:
+                    self.log.emit(f"⚠ Row {row_number}: no Para Sr. No. or complete reference; skipped")
+                    continue
                 self.log.emit(f"🔍 BN {batch} | SDiv {sub_div} | AC No. {ref_no}")
                 temp_pdfs, total_amount, page_number = [], 0.0, 1
-                final_pdf = Path(self.output_folder) / f"{para_sr}.pdf"
+                final_pdf = Path(self.output_folder) / f"{output_id}.pdf"
                 # A result belongs only to this run.  Remove any previous
                 # result before searching so a no-payment run can never leave
                 # an old PDF looking like a newly extracted one.
@@ -193,7 +203,6 @@ class PaymentExtract88LWorker(QThread):
                         self.log.emit(f"⚠ Could not remove previous PDF {final_pdf.name}: {exc}")
                         sheet.cell(row_number, status_col).value = "PDF not created - output locked"
                         continue
-                resolved_ref = consumer_reference(ref_no, sub_div)
                 self.log.emit(f"🎯 Ledger AC used for exact matching: {resolved_ref or '(none)'}")
                 for record in by_batch.get(batch, []):
                     try: text = record["path"].read_text(encoding="utf-8", errors="ignore")
@@ -212,8 +221,12 @@ class PaymentExtract88LWorker(QThread):
                             payment_cols[pay_header], payment_cols[date_header] = next_col, next_col + 1
                         sheet.cell(row_number, payment_cols[pay_header]).value = amount
                         sheet.cell(row_number, payment_cols[date_header]).value = f"{date_dd_mm}/{year}" if year else date_dd_mm
-                        temp = Path(self.output_folder) / f"temp_{para_sr}_{page_number}.pdf"
-                        self.create_pdf(page, temp, f"Para Sr. No. {para_sr}" if page_number == 1 else f"Para Sr. No. {para_sr} ({page_number})", consumer_reference(ref_no, sub_div), amount, date_dd_mm, canvas, page_size, colors)
+                        temp = Path(self.output_folder) / f"temp_{output_id}_{page_number}.pdf"
+                        label = ""
+                        if para_sr:
+                            label_prefix = f"Para Sr. No. {para_sr}"
+                            label = label_prefix if page_number == 1 else f"{label_prefix} ({page_number})"
+                        self.create_pdf(page, temp, label, resolved_ref, amount, date_dd_mm, canvas, page_size, colors)
                         temp_pdfs.append(temp); page_number += 1
                 if temp_pdfs:
                     merger = PdfMerger()
@@ -247,8 +260,11 @@ class PaymentExtract88LWorker(QThread):
         gap = min(reference_size + 1, height_gap)
         font_size = max(5, min(reference_size, width_size, gap - 1))
         gap = max(font_size + 1, height_gap)
-        c.setFont("Courier", font_size); first_width = c.stringWidth(lines[0], "Courier", font_size); c.setFont("Helvetica-Bold", 10); label_width = c.stringWidth(label, "Helvetica-Bold", 10); label_x = left + first_width - label_width; label_y = height - top + gap
-        c.drawString(label_x, label_y, label); c.line(label_x, label_y - 1.5, label_x + label_width, label_y - 1.5); c.setFont("Courier", font_size); y = height - top - gap
+        c.setFont("Courier", font_size)
+        y = height - top - gap
+        if label:
+            first_width = c.stringWidth(lines[0], "Courier", font_size); c.setFont("Helvetica-Bold", 10); label_width = c.stringWidth(label, "Helvetica-Bold", 10); label_x = left + first_width - label_width; label_y = height - top + gap
+            c.drawString(label_x, label_y, label); c.line(label_x, label_y - 1.5, label_x + label_width, label_y - 1.5); c.setFont("Courier", font_size)
         for line in lines:
             if ref_no in line and amount in line and date_dd_mm in line:
                 c.saveState(); c.setFillAlpha(0.25); c.setFillColor(colors.yellow); c.rect(left - 2, y - 2, c.stringWidth(line, "Courier", font_size) + 4, gap + 2, 0, 1); c.restoreState()
@@ -258,7 +274,7 @@ class PaymentExtract88LWorker(QThread):
 
 class PaymentExtract88LPanel(QWidget):
     def __init__(self):
-        super().__init__(); self.worker = None
+        super().__init__(); self.worker = None; self._completion_shown = False
         layout = QVBoxLayout(self); layout.setSpacing(10); layout.addWidget(lbl("88L Payment Extractor", bold=True, color="#7eb8f7")); layout.addWidget(hline())
         group = QGroupBox("Inputs"); form = QVBoxLayout(group)
         self.excel_ed = self.add_path_row(form, "Excel File:", False, "Excel (*.xlsx)")
@@ -287,11 +303,15 @@ class PaymentExtract88LPanel(QWidget):
     def start(self):
         if not all((self.excel_ed.text(), self.root_ed.text(), self.output_ed.text())):
             QMessageBox.warning(self, "Missing", "Select an Excel file, 88L folder, and output folder first."); return
+        self._completion_shown = False
         self.worker = PaymentExtract88LWorker(self.excel_ed.text(), self.root_ed.text(), self.output_ed.text()); self.worker.log.connect(self.log_box.append); self.worker.progress.connect(self.progress.setValue); self.worker.finished.connect(self.on_finished); self.start_btn.setEnabled(False); self.stop_btn.setEnabled(True); self.worker.start()
 
     def stop(self):
         if self.worker: self.worker.stop()
 
     def on_finished(self):
+        if self._completion_shown:
+            return
+        self._completion_shown = True
         self.start_btn.setEnabled(True); self.stop_btn.setEnabled(False)
         notify(self, "Completed", "88L payment extraction completed.")
