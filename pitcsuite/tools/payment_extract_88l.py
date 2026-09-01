@@ -61,19 +61,59 @@ def split_pages(text, header):
     return ["\n".join(([header] if header else []) + lines[start:end]) for start, end in zip(starts, starts[1:] + [len(lines)])]
 
 
-def extract_payment(page_text, ref_no):
+def consumer_reference(ref_no, sub_div=""):
+    """Resolve the 7-digit ledger AC from a plain or composite reference."""
+    reference = safe_text(ref_no)
+    digits = re.sub(r"\D", "", reference)
+    if not digits or reference.lower() in {"nan", "none", "null"}:
+        return ""
+    if len(digits) <= 7:
+        return digits.zfill(7)
+
+    # Composite references contain the subdivision followed by the printed
+    # account suffix.  Only use this fallback when the selected subdivision is
+    # actually present in the reference; never guess from an arbitrary suffix.
+    subdivision = re.sub(r"\D", "", safe_text(sub_div))
+    if subdivision and subdivision in digits:
+        suffix = digits[digits.find(subdivision) + len(subdivision):]
+        if suffix:
+            return suffix[-6:].zfill(7)
+    return ""
+
+
+def extract_payment(page_text, ref_no, sub_div=""):
+    """Return a payment only when *ref_no* is an exact consumer row on page.
+
+    88L ledgers wrap a consumer row over several lines.  The account number is
+    the first token of the row and payment amount/date may be on a continuation
+    line.  Matching arbitrary text in the page (or allowing an empty reference
+    to match) causes unrelated months to be exported.
+    """
+    reference = consumer_reference(ref_no, sub_div)
+    if not reference:
+        return None, None
+
     lines = page_text.splitlines()
-    normalized = ref_no.lstrip("0") or "0" if ref_no.isdigit() else ref_no
-    ref_pattern = re.compile(rf"^\s*0*{re.escape(normalized)}(?!\d)(?:\s|$)")
-    consumer_row = re.compile(r"^\s*\d{7}(?:\s|$)")
+    # Excel may supply the AC as a number and drop leading zeroes.  Compare
+    # digit-only values after removing leading zeroes, but never compare a
+    # partial account number or a substring of another token.
+    reference_key = reference.lstrip("0") or "0"
+
+    consumer_row = re.compile(r"^\s*(\d{7})(?=\s|$)")
+    payment_pattern = re.compile(r"\b(\d+(?:\.\d+)?)\s+(\d{2}/\d{2})\b")
     for index, line in enumerate(lines):
-        if not ref_pattern.search(line):
+        row_match = consumer_row.match(line)
+        if not row_match:
             continue
+        row_key = row_match.group(1).lstrip("0") or "0"
+        if row_key != reference_key:
+            continue
+
         end = index + 1
-        while end < len(lines) and not consumer_row.search(lines[end]):
+        while end < len(lines) and not consumer_row.match(lines[end]):
             end += 1
-        match = re.search(r"\b(\d+(?:\.\d+)?)\s+(\d{2}/\d{2})\b", " ".join(lines[index:end]))
-        if match:
+        match = payment_pattern.search(" ".join(lines[index:end]))
+        if match and float(match.group(1).replace(",", "")) > 0:
             return match.group(1), match.group(2)
     return None, None
 
@@ -105,6 +145,7 @@ class PaymentExtract88LWorker(QThread):
         except ImportError as exc:
             self.log.emit(f"ERROR: Missing library — {exc}"); self.finished.emit(); return
         try:
+            self.log.emit(f"88L extractor source: {Path(__file__).resolve()}")
             records = discover_files(self.text_root)
             by_batch = {}
             for record in records:
@@ -140,12 +181,26 @@ class PaymentExtract88LWorker(QThread):
                 if not para_sr or para_sr.lower() == "nan": continue
                 self.log.emit(f"🔍 BN {batch} | SDiv {sub_div} | AC No. {ref_no}")
                 temp_pdfs, total_amount, page_number = [], 0.0, 1
+                final_pdf = Path(self.output_folder) / f"{para_sr}.pdf"
+                # A result belongs only to this run.  Remove any previous
+                # result before searching so a no-payment run can never leave
+                # an old PDF looking like a newly extracted one.
+                if final_pdf.exists():
+                    try:
+                        final_pdf.unlink()
+                        self.log.emit(f"🧹 Removed previous PDF: {final_pdf.name}")
+                    except OSError as exc:
+                        self.log.emit(f"⚠ Could not remove previous PDF {final_pdf.name}: {exc}")
+                        sheet.cell(row_number, status_col).value = "PDF not created - output locked"
+                        continue
+                resolved_ref = consumer_reference(ref_no, sub_div)
+                self.log.emit(f"🎯 Ledger AC used for exact matching: {resolved_ref or '(none)'}")
                 for record in by_batch.get(batch, []):
                     try: text = record["path"].read_text(encoding="utf-8", errors="ignore")
                     except OSError as exc: self.log.emit(f"⚠ Could not read {record['path'].name}: {exc}"); continue
                     for page in split_pages(text, ledger_header(text)):
                         if sub_div and not re.search(rf"(?<!\d){re.escape(sub_div)}(?!\d)", page): continue
-                        amount, date_dd_mm = extract_payment(page, ref_no)
+                        amount, date_dd_mm = extract_payment(page, ref_no, sub_div)
                         if not amount: continue
                         year, total_amount = ledger_year(text, record["year"]), total_amount + float(amount.replace(",", ""))
                         self.log.emit(f"✅ Payment {page_number} | Amount: {amount} | Date: {date_dd_mm}/{year}")
@@ -158,10 +213,10 @@ class PaymentExtract88LWorker(QThread):
                         sheet.cell(row_number, payment_cols[pay_header]).value = amount
                         sheet.cell(row_number, payment_cols[date_header]).value = f"{date_dd_mm}/{year}" if year else date_dd_mm
                         temp = Path(self.output_folder) / f"temp_{para_sr}_{page_number}.pdf"
-                        self.create_pdf(page, temp, f"Para Sr. No. {para_sr}" if page_number == 1 else f"Para Sr. No. {para_sr} ({page_number})", ref_no, amount, date_dd_mm, canvas, page_size, colors)
+                        self.create_pdf(page, temp, f"Para Sr. No. {para_sr}" if page_number == 1 else f"Para Sr. No. {para_sr} ({page_number})", consumer_reference(ref_no, sub_div), amount, date_dd_mm, canvas, page_size, colors)
                         temp_pdfs.append(temp); page_number += 1
                 if temp_pdfs:
-                    final_pdf = Path(self.output_folder) / f"{para_sr}.pdf"; merger = PdfMerger()
+                    merger = PdfMerger()
                     for temp in temp_pdfs: merger.append(str(temp))
                     merger.write(str(final_pdf)); merger.close()
                     for temp in temp_pdfs:
@@ -182,11 +237,19 @@ class PaymentExtract88LWorker(QThread):
         c = canvas.Canvas(str(output_path), pagesize=page_size); width, height = page_size; lines = text.splitlines()
         if not lines: c.save(); return
         left, top, bottom = 18, 30, 22; usable_width = width - 36; reference_size = 9
-        longest = max(c.stringWidth(line, "Courier", reference_size) for line in lines); font_size = max(7, min(reference_size, reference_size * usable_width / max(longest, 1))); gap = max(7, font_size + 1)
+        longest = max(c.stringWidth(line, "Courier", reference_size) for line in lines)
+        width_size = reference_size * usable_width / max(longest, 1)
+        # Fit the complete source page vertically.  The old fixed line gap
+        # silently dropped the bottom rows, including a valid matched AC and
+        # its payment, from the generated PDF.
+        available_height = height - top - bottom
+        height_gap = available_height / max(len(lines), 1)
+        gap = min(reference_size + 1, height_gap)
+        font_size = max(5, min(reference_size, width_size, gap - 1))
+        gap = max(font_size + 1, height_gap)
         c.setFont("Courier", font_size); first_width = c.stringWidth(lines[0], "Courier", font_size); c.setFont("Helvetica-Bold", 10); label_width = c.stringWidth(label, "Helvetica-Bold", 10); label_x = left + first_width - label_width; label_y = height - top + gap
         c.drawString(label_x, label_y, label); c.line(label_x, label_y - 1.5, label_x + label_width, label_y - 1.5); c.setFont("Courier", font_size); y = height - top - gap
         for line in lines:
-            if y < bottom: break
             if ref_no in line and amount in line and date_dd_mm in line:
                 c.saveState(); c.setFillAlpha(0.25); c.setFillColor(colors.yellow); c.rect(left - 2, y - 2, c.stringWidth(line, "Courier", font_size) + 4, gap + 2, 0, 1); c.restoreState()
             c.drawString(left, y, line); y -= gap
