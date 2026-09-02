@@ -5,10 +5,11 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
-    QFileDialog, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QFileDialog, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QMessageBox, QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
 
+from pitcsuite.templates import download_template
 from pitcsuite.ui_helpers import START_BTN, STOP_BTN, hline, lbl, notify
 
 
@@ -219,8 +220,8 @@ class CP52Worker(QThread):
     done = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, source_dir, workbook, output_dir):
-        super().__init__(); self.source_dir = Path(source_dir); self.workbook = Path(workbook); self.output_dir = Path(output_dir)
+    def __init__(self, source_dir, workbook, output_dir, code_filter):
+        super().__init__(); self.source_dir = Path(source_dir); self.workbook = Path(workbook); self.output_dir = Path(output_dir); self.code_filter = code_filter
 
     def run(self):
         try:
@@ -230,7 +231,7 @@ class CP52Worker(QThread):
             import importlib
             from pitcsuite.tools import cp52_posting_checker_logic
             logic = importlib.reload(cp52_posting_checker_logic)
-            result = logic.process_workbook(self.source_dir, self.workbook, self.output_dir, self.log.emit)
+            result = logic.process_workbook(self.source_dir, self.workbook, self.output_dir, self.log.emit, self.code_filter)
             self.done.emit(str(result))
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -248,9 +249,18 @@ class CP52PostingCheckerPanel(QWidget):
         for label, edit, kind in (("Posting folder:", self.source_ed, "folder"), ("Excel input:", self.workbook_ed, "excel"), ("Output folder:", self.output_ed, "folder")):
             row = QHBoxLayout(); row.addWidget(QLabel(label)); edit.setProperty("preferred_width", 245); row.addWidget(edit, 1)
             button = QPushButton("Browse"); button.clicked.connect(lambda _, e=edit, k=kind: self._browse(e, k)); row.addWidget(button); form.addLayout(row)
+        filter_row = QHBoxLayout(); filter_row.addWidget(QLabel("Find Posting of:"))
+        self.code_filter = QComboBox()
+        self.code_filter.addItem("Code-C", "C")
+        self.code_filter.addItem("Code-B", "B")
+        self.code_filter.addItem("Code-F", "F")
+        self.code_filter.addItem("All Codes", "ALL")
+        self.code_filter.setCurrentIndex(3)
+        filter_row.addWidget(self.code_filter); filter_row.addStretch(); form.addLayout(filter_row)
         layout.addWidget(group)
         actions = QHBoxLayout(); self.start_btn = QPushButton("▶  CHECK POSTING"); self.start_btn.setStyleSheet(START_BTN); self.start_btn.clicked.connect(self._start); actions.addWidget(self.start_btn)
-        open_btn = QPushButton("Open Output"); open_btn.clicked.connect(self._open_output); actions.addWidget(open_btn); actions.addStretch(); layout.addLayout(actions)
+        template_btn = QPushButton("Download Template"); template_btn.setMinimumWidth(145); template_btn.clicked.connect(self._download_template); actions.addWidget(template_btn)
+        open_btn = QPushButton("Open Folder"); open_btn.setMinimumWidth(120); open_btn.clicked.connect(self._open_output); actions.addWidget(open_btn); actions.addStretch(); layout.addLayout(actions)
         self.status = QLabel("Status: Ready"); self.status.setStyleSheet("color:#4a90d9;"); layout.addWidget(self.status)
         self.log_box = QTextEdit(); self.log_box.setReadOnly(True); layout.addWidget(self.log_box)
 
@@ -267,14 +277,23 @@ class CP52PostingCheckerPanel(QWidget):
             QMessageBox.warning(self, "Invalid input", "Select an existing posting folder and Excel workbook first."); return
         output = Path(self.output_ed.text().strip()) if self.output_ed.text().strip() else source / "output"
         self.output_ed.setText(str(output)); self.log_box.clear(); self.status.setText("Status: Processing..."); self.start_btn.setEnabled(False)
-        self.worker = CP52Worker(source, workbook, output)
+        self.worker = CP52Worker(source, workbook, output, self.code_filter.currentData())
         self.worker.log.connect(self._log); self.worker.done.connect(self._done); self.worker.failed.connect(self._failed); self.worker.finished.connect(lambda: self.start_btn.setEnabled(True)); self.worker.start()
 
     def _open_output(self):
         path = Path(self.output_ed.text().strip()) if self.output_ed.text().strip() else Path.cwd() / "output"
         path.mkdir(parents=True, exist_ok=True); os.startfile(str(path))
 
-    def _log(self, message): self.log_box.append(message)
+    def _download_template(self):
+        download_template(
+            self,
+            ["AC No", "Amount", "Para Sr No.", "Debit Code", "Found Amount", "Remarks"],
+            "CP52_Posting_Checker_Template.xlsx",
+        )
+
+    def _log(self, message):
+        self.log_box.append(message)
+        self.status.setText(f"Status: {message}")
     def _done(self, result):
         self.status.setText(f"Status: Completed — {result}"); notify(self, "Completed", f"Excel updated:\n{result}")
     def _failed(self, message):
