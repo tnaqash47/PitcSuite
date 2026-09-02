@@ -25,6 +25,11 @@ REPORT_HREF = {
     "summary":    "CustomerDataSummary",
 }
 
+# PITC billing values can differ from the Excel amount in the final rupee
+# digit.  Accept differences of up to 9 rupees when locating and highlighting
+# the requested amount.
+AMOUNT_DIFFERENCE_TOLERANCE = 9
+
 
 class PITCWorker(QThread):
     progress = Signal(int)
@@ -181,8 +186,8 @@ class PITCWorker(QThread):
             except (InvalidOperation, ValueError, TypeError):
                 return None
 
-        def amount_matches(value, amount, tolerance=1):
-            """Return True when two whole-rupee amounts are equal or differ by 1."""
+        def amount_matches(value, amount, tolerance=AMOUNT_DIFFERENCE_TOLERANCE):
+            """Return True when whole-rupee amounts differ by at most 9."""
             value = amount_as_integer(value)
             target = amount_as_integer(amount)
             return value is not None and target is not None and abs(value - target) <= tolerance
@@ -209,7 +214,7 @@ class PITCWorker(QThread):
         def debit_amount_in_month_row(page, month, amount):
             """Find the closest debit amount on the row containing the month.
 
-            Billing reports can differ by one rupee from the Excel value. The
+            Billing reports can differ by up to nine rupees from the Excel value. The
             row match deliberately ignores decimal places and prefers the
             closest numeric value, while avoiding amounts from other rows.
             """
@@ -240,9 +245,9 @@ class PITCWorker(QThread):
                 return []
 
             candidates.sort(key=lambda item: item[0])
-            # A one-rupee tolerance handles the known posting difference but
-            # prevents an unrelated value on the same row being highlighted.
-            return [candidates[0][1]] if candidates[0][0] <= 1 else []
+            # A nine-rupee tolerance handles final-digit posting differences
+            # while still preferring the closest amount on the matching row.
+            return [candidates[0][1]] if candidates[0][0] <= AMOUNT_DIFFERENCE_TOLERANCE else []
 
         def filter_pdf(pdf_path, month=None, amount=None, page_from=None, page_to=None):
             """Filter by an explicit page range or by month/amount."""
