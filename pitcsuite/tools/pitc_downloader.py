@@ -658,12 +658,8 @@ class PITCPanel(QWidget):
         layout.addWidget(hline())
 
         # ── Excel + Template ──
-        g1 = QGroupBox("Excel File  (Columns: A = AC No  ·  B = Sr No  ·  C = Month  ·  D = Amount  ·  E = Status)")
+        g1 = QGroupBox("Excel File")
         g1v = QVBoxLayout(g1)
-        g1.setTitle("Excel File")
-        columns_hint = QLabel("Columns: A = AC No  -  B = Sr No\nC = Month  -  D = Amount  -  E = Status")
-        columns_hint.setWordWrap(True)
-        g1v.addWidget(columns_hint)
         r_ex = QHBoxLayout()
         self.excel_ed = QLineEdit("D:\\PITC.xlsx"); self.excel_ed.setReadOnly(True); self.excel_ed.setProperty("preferred_width", 245)
         b1 = QPushButton("Browse"); b1.clicked.connect(self.pick_excel)
@@ -716,13 +712,10 @@ class PITCPanel(QWidget):
         report_match_row.addWidget(g_match, 1)
         layout.addLayout(report_match_row)
 
-        # Keep the page-range controls in a dedicated left box and reserve a
-        # matching blank box on the right for future options.
-        future_options = QGroupBox()
+        # Page range and print timing share the same row.
         options_row = QHBoxLayout()
         options_row.setSpacing(8)
         options_row.addWidget(g_pages, 1)
-        options_row.addWidget(future_options, 1)
         layout.addLayout(options_row)
 
         # ── Paths ──
@@ -745,11 +738,12 @@ class PITCPanel(QWidget):
 
         g3h.addWidget(QLabel("Restart"), 0, 0);        self.sp_restart = spin(35, 1, 200); g3h.addWidget(self.sp_restart, 0, 1)
         g3h.addWidget(QLabel("Warmup"), 0, 2);         self.sp_warmup  = spin(0, 0, 200);  g3h.addWidget(self.sp_warmup, 0, 3)
-        g3h.addWidget(QLabel("Print Wait (s)"), 0, 4); self.sp_pwait   = spin(6,  1, 200); g3h.addWidget(self.sp_pwait, 0, 5)
-        g3h.addWidget(QLabel("Print X"), 1, 0);        self.sp_px      = spin(30);         g3h.addWidget(self.sp_px, 1, 1)
-        g3h.addWidget(QLabel("Print Y"), 1, 2);        self.sp_py      = spin(165);        g3h.addWidget(self.sp_py, 1, 3)
-        g3h.setColumnStretch(6, 1)
-        layout.addWidget(g3)
+        g3h.addWidget(QLabel("Print Wait (s)"), 1, 0); self.sp_pwait   = spin(6,  1, 200); g3h.addWidget(self.sp_pwait, 1, 1)
+        g3h.addWidget(QLabel("Print X"), 2, 0);        self.sp_px      = spin(30);         g3h.addWidget(self.sp_px, 2, 1)
+        g3h.addWidget(QLabel("Print Y"), 2, 2);        self.sp_py      = spin(165);        g3h.addWidget(self.sp_py, 2, 3)
+        g3h.setColumnStretch(1, 1)
+        g3h.setColumnStretch(3, 1)
+        options_row.addWidget(g3, 1)
 
         # ── Buttons ──
         bh = QHBoxLayout()
