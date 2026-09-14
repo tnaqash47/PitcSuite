@@ -128,7 +128,7 @@ class BillScraperPanel(QWidget):
         self.xlsx_ed = QLineEdit(); self.xlsx_ed.setReadOnly(True); self.xlsx_ed.setProperty("preferred_width", 245); row.addWidget(self.xlsx_ed, 1)
         browse = QPushButton("Browse"); browse.clicked.connect(self._browse); row.addWidget(browse); form.addLayout(row)
         options = QHBoxLayout(); options.addWidget(QLabel("Delay between bills (seconds):"))
-        self.delay = QDoubleSpinBox(); self.delay.setRange(0, 30); self.delay.setSingleStep(.1); self.delay.setValue(5); options.addWidget(self.delay); options.addStretch(); form.addLayout(options)
+        self.delay = QDoubleSpinBox(); self.delay.setRange(0.1, 30); self.delay.setSingleStep(.1); self.delay.setValue(2.0); options.addWidget(self.delay); options.addStretch(); form.addLayout(options)
         layout.addWidget(group)
         actions = QHBoxLayout(); self.start_btn = QPushButton("▶  START"); self.start_btn.setStyleSheet(START_BTN); self.start_btn.clicked.connect(self._start)
         self.stop_btn = QPushButton("■  STOP"); self.stop_btn.setStyleSheet(STOP_BTN); self.stop_btn.setEnabled(False); self.stop_btn.clicked.connect(self._stop)
