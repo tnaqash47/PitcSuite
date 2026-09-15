@@ -25,6 +25,12 @@ from openpyxl import load_workbook
 
 URL = "https://bill.pitc.com.pk/pescobill"
 
+
+def resource_path(relative_path):
+    """Resolve bundled resources in both source runs and PyInstaller builds."""
+    bundle_root = getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)
+    return str(Path(bundle_root) / relative_path)
+
 # Fields that are intentionally never requested/exported.
 DROP_LETTERS = {"B", "C", "E", "H", "K", "L", "M", "N", "P", "Q", "S"}
 DROP_RANGES = ((24, 50), (28, 55), (36, 64), (67, 67), (98, 214), (217, 244))  # X:AX, AB:BC, AJ:BL, BO, CT:HF and HI:IJ
@@ -50,6 +56,31 @@ def excel_col(n):
         n, rem = divmod(n - 1, 26)
         result = chr(65 + rem) + result
     return result
+
+
+def excel_numeric_value(value):
+    """Convert bill numbers such as '41,839' to values Excel treats as numeric."""
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    text = clean(value).replace(",", "")
+    text = re.sub(r"\s*(?:kw|kva)\s*$", "", text, flags=re.I)
+    if not re.fullmatch(r"[-+]?(?:\d+(?:\.\d+)?|\.\d+)", text):
+        return value
+    number = float(text)
+    return int(number) if number.is_integer() else number
+
+
+def should_be_numeric(key):
+    """Identify bill fields that should be written as numbers, not text."""
+    normalized = normalized_key(key).lower()
+    if normalized in {
+        "payment", "grand_total", "adjustments", "san_load",
+        "prv_cum_mdi_1", "prv_cum_mdi_2", "cum_mdi_1", "cum_mdi_2",
+    }:
+        return True
+    return bool(re.fullmatch(r"(?:kwh|kvarh|mdi)_(?:present|read|mf|units)(?:_\d+)?", normalized))
 
 
 def clean(value):
@@ -182,6 +213,10 @@ GENERAL_LABELS = {
     "adjustment": "adjustments",
     "adjustments": "adjustments",
     "grand total": "grand_total",
+    "amount paid": "payment",
+    "paid amount": "payment",
+    "payment": "payment",
+    "payment date": "payment_date",
     "ntn no": "ntn_no",
     "bill month": "bill_month",
     "due date": "due_date",
@@ -198,6 +233,7 @@ def order_output_headers(headers):
     """Keep tariff/san-load stable and keep meter readings under fixed names."""
     first = [
         "AC No.", "tariff", "san_load", "status", "adjustments", "grand_total",
+        "payment", "payment_date",
         "ntn_no", "bill_month", "name_address", "due_date",
     ]
     ordered = [name for name in first if name in headers]
@@ -691,6 +727,8 @@ class PITCBillScraper:
         for row_idx, record in enumerate(row_records, 2):
             for col_idx, h in enumerate(final_headers, 1):
                 val = record.get(h)
+                if val is not None and should_be_numeric(h):
+                    val = excel_numeric_value(val)
                 sheet.cell(row_idx, col_idx).value = val if val is not None else ""
 
         workbook.save(path)
@@ -700,6 +738,10 @@ class BillScraperApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("PITC Bill Scrapper & MDI Analyzer")
+        try:
+            self.iconbitmap(resource_path("assets/mdiscrapper.ico"))
+        except tk.TclError:
+            pass
         self.geometry("640x600")
         self.minsize(580, 520)
 
@@ -708,6 +750,14 @@ class BillScraperApp(tk.Tk):
             self.style.theme_use("clam")
         except Exception:
             pass
+        self.style.configure(
+            "Green.Horizontal.TProgressbar",
+            troughcolor="#e2e8f0",
+            background="#16a34a",
+            lightcolor="#16a34a",
+            darkcolor="#15803d",
+            bordercolor="#cbd5e1",
+        )
 
         self.events = queue.Queue()
         self.stop_event = threading.Event()
@@ -770,7 +820,7 @@ class BillScraperApp(tk.Tk):
         ttk.Label(stats_box, text="Errors:").grid(row=0, column=4, sticky="w", padx=4)
         ttk.Label(stats_box, textvariable=self.err_var, font=("Segoe UI", 9, "bold"), foreground="#b91c1c").grid(row=0, column=5, sticky="w", padx=4)
 
-        self.progress = ttk.Progressbar(root, mode="determinate")
+        self.progress = ttk.Progressbar(root, mode="determinate", style="Green.Horizontal.TProgressbar")
         self.progress.pack(fill="x", pady=(4, 6))
 
         status_lbl = ttk.Label(root, textvariable=self.status_var, font=("Segoe UI", 9), foreground="#0f172a")

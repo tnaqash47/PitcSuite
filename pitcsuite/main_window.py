@@ -44,7 +44,9 @@ class MainWindow(QMainWindow):
         outer = QHBoxLayout(root)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        self.nav_collapsed = True
+        # Tool labels are visible when the application opens; the menu button
+        # still toggles them into the compact icon-only view.
+        self.nav_collapsed = False
         self.nav = QWidget()
         nav_layout = QVBoxLayout(self.nav)
         nav_layout.setContentsMargins(0, 6, 0, 6)
@@ -53,9 +55,6 @@ class MainWindow(QMainWindow):
         self.nav_menu_btn.setToolTip("Show/hide tool labels")
         self.nav_menu_btn.clicked.connect(self.toggle_nav)
         nav_layout.addWidget(self.nav_menu_btn)
-        self.title_lbl = QLabel("PITC Suite")
-        self.title_lbl.setAlignment(Qt.AlignCenter)
-        nav_layout.addWidget(self.title_lbl)
         self.nav_btns = []
         self.nav_names = []
         for i, (name, panel_class) in enumerate(TOOLS):
@@ -69,7 +68,7 @@ class MainWindow(QMainWindow):
             self.nav_btns.append(button)
             self.nav_names.append(name)
         nav_layout.addStretch()
-        self.ver_lbl = QLabel("v1.8")
+        self.ver_lbl = QLabel("V2.1")
         self.ver_lbl.setAlignment(Qt.AlignCenter)
         nav_layout.addWidget(self.ver_lbl)
         self._apply_nav_state()
@@ -131,7 +130,6 @@ class MainWindow(QMainWindow):
 
     def _apply_nav_state(self):
         self.nav.setFixedWidth(44 if self.nav_collapsed else 200)
-        self.title_lbl.setVisible(not self.nav_collapsed)
         self.ver_lbl.setVisible(not self.nav_collapsed)
         for button, name in zip(self.nav_btns, self.nav_names):
             if not button.icon().isNull():

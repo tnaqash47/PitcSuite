@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
     QFileDialog, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QListWidget, QMessageBox, QPushButton, QTextEdit, QVBoxLayout, QWidget,
+    QListWidget, QMessageBox, QPushButton, QTextEdit, QProgressBar, QVBoxLayout, QWidget,
 )
 
 from pitcsuite.templates import download_template
@@ -134,6 +134,9 @@ class BillScraperPanel(QWidget):
         self.stop_btn = QPushButton("■  STOP"); self.stop_btn.setStyleSheet(STOP_BTN); self.stop_btn.setEnabled(False); self.stop_btn.clicked.connect(self._stop)
         actions.addWidget(self.start_btn); actions.addWidget(self.stop_btn); actions.addStretch(); layout.addLayout(actions)
         self.progress = QLabel("Processed: 0"); layout.addWidget(self.progress)
+        self.progress_bar = QProgressBar(); self.progress_bar.setRange(0, 1); self.progress_bar.setValue(0)
+        self.progress_bar.setStyleSheet("QProgressBar { border: 1px solid #cbd5e1; border-radius: 4px; background: #e2e8f0; text-align: center; } QProgressBar::chunk { background-color: #16a34a; border-radius: 3px; }")
+        layout.addWidget(self.progress_bar)
         self.log_box = QTextEdit(); self.log_box.setReadOnly(True); layout.addWidget(self.log_box)
 
     def _browse(self):
@@ -145,11 +148,13 @@ class BillScraperPanel(QWidget):
         if not path.is_file(): QMessageBox.warning(self, "Input required", "Choose an existing .xlsx workbook first."); return
         if not QMessageBox.question(self, "Update workbook", "The workbook will be updated in place. Continue?", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes: return
         self.stop_event.clear(); self.log_box.clear(); self.start_btn.setEnabled(False); self.stop_btn.setEnabled(True)
+        self.progress_bar.setRange(0, 1); self.progress_bar.setValue(0)
         self.worker = BillScraperWorker(path, self.delay.value(), self.stop_event)
         self.worker.progress.connect(self._progress); self.worker.done.connect(self._done); self.worker.failed.connect(self._failed); self.worker.start()
 
     def _stop(self): self.stop_event.set(); self.progress.setText("Stopping after the current bill...")
     def _progress(self, done, total, account, status):
+        self.progress_bar.setRange(0, max(total, 1)); self.progress_bar.setValue(done)
         self.progress.setText(f"Processed {done} of {total} | {account}: {status}"); self.log_box.append(f"{account}: {status}")
     def _done(self, path, cancelled):
         self.start_btn.setEnabled(True); self.stop_btn.setEnabled(False); self.progress.setText("Stopped." if cancelled else "Completed")
