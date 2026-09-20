@@ -661,7 +661,10 @@ class PITCPanel(QWidget):
         g1 = QGroupBox("Excel File")
         g1v = QVBoxLayout(g1)
         r_ex = QHBoxLayout()
-        self.excel_ed = QLineEdit("D:\\PITC.xlsx"); self.excel_ed.setReadOnly(True); self.excel_ed.setProperty("preferred_width", 245)
+        self.excel_ed = QLineEdit()
+        self.excel_ed.setPlaceholderText("Select Excel file (*.xlsx)...")
+        self.excel_ed.setReadOnly(True)
+        self.excel_ed.setProperty("preferred_width", 245)
         b1 = QPushButton("Browse"); b1.clicked.connect(self.pick_excel)
         btn_tpl = QPushButton("⬇  Download Template")
         btn_tpl.setStyleSheet("background:#194; border:none; border-radius:4px; padding:5px 10px; color:#fff;")
@@ -769,6 +772,14 @@ class PITCPanel(QWidget):
         )
 
     def run(self):
+        excel_path = self.excel_ed.text().strip()
+        if not excel_path:
+            QMessageBox.warning(self, "Excel File Required", "Please select an Excel file before starting.")
+            return
+        if not os.path.isfile(excel_path):
+            QMessageBox.warning(self, "File Not Found", f"The selected Excel file does not exist:\n{excel_path}")
+            return
+
         page_from_text = self.page_from_ed.text().strip()
         page_to_text = self.page_to_ed.text().strip()
         if bool(page_from_text) != bool(page_to_text):
