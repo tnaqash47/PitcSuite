@@ -178,4 +178,4 @@ python -m unittest discover -s tests -v
 ## 👤 Author
 
 Developed by **Tahir Naqash**  
-GitHub: [@tahirnaqash4](https://github.com/tahirnaqash4)
+GitHub: [@tahirnaqash4](https://github.com/tnaqash47)
